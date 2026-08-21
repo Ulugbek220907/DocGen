@@ -11,11 +11,26 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
+// Render (and most managed Postgres providers) require SSL for any
+// connection from outside their own network — including your own laptop
+// talking to a Render database during local development. Rather than only
+// enabling SSL when NODE_ENV=production (which is wrong for exactly that
+// local-dev-against-a-cloud-db case), detect it from the host itself:
+// localhost/127.0.0.1 never needs SSL, anything else almost always does.
+function needsSSL(connectionString) {
+  if (!connectionString) return false;
+  try {
+    const url = new URL(connectionString);
+    const host = url.hostname;
+    return host !== 'localhost' && host !== '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Render's managed Postgres requires SSL; local Postgres usually doesn't.
-  // NODE_ENV=production (set automatically by Render) turns this on.
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl: needsSSL(process.env.DATABASE_URL) ? { rejectUnauthorized: false } : false
 });
 
 module.exports = pool;
