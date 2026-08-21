@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Secrets — never commit
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

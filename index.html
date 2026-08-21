@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>DocGen AI</title>
+<link rel="stylesheet" href="style.css?v=6" />
+</head>
+<body>
+
+<div id="appRoot" class="hidden">
+  <!-- Overlay for sidebar -->
+  <div id="overlay" class="overlay"></div>
+
+  <!-- Hamburger button, fixed top-left, shown when sidebar closed -->
+  <button id="openSidebar" class="icon-btn hamburger-btn">☰</button>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <button id="closeSidebar" class="icon-btn">✕</button>
+      <span class="app-title">DocGen AI</span>
+    </div>
+
+    <button id="newChatBtn" class="new-chat-btn">
+      <span class="icon">✎</span><span class="new-chat-label">New document</span>
+    </button>
+
+    <div class="sidebar-section">
+      <div class="section-label">Recent</div>
+      <div id="historyList" class="history-list">
+        <!-- history items injected here -->
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-row" id="openSettings">
+        <div class="avatar">U</div>
+        <div class="user-info">
+          <div class="user-name">Account</div>
+          <div class="user-plan" id="planLabel">No API key set</div>
+        </div>
+        <span class="gear">⚙</span>
+      </div>
+      <button id="logoutBtn" class="logout-btn">Log out</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <div class="model-select">DocGen <span class="dot"></span></div>
+    </header>
+
+    <section id="chatArea" class="chat-area">
+      <div id="greeting" class="greeting">
+        <div class="spark">✦</div>
+        <div class="greeting-text">Let's create your document</div>
+        <div class="greeting-sub">Describe what you need — invoice, resume, report, spreadsheet — and pick a format.</div>
+        <div class="template-chips" id="templateChips">
+          <button class="template-chip" data-template="Create an invoice for a web design project. Client: [Client Name], amount: $1,500, due in 30 days.">🧾 Invoice</button>
+          <button class="template-chip" data-template="Write a professional resume for a software engineer with 3 years of experience.">📄 Resume</button>
+          <button class="template-chip" data-template="Create a monthly budget spreadsheet with income, expenses by category, and a total row using a real formula.">💰 Budget (XLSX)</button>
+          <button class="template-chip" data-template="Write a formal cover letter for a marketing coordinator position.">✉️ Cover letter</button>
+          <button class="template-chip" data-template="Create a 5-question multiple choice quiz on world capitals with an answer key.">📝 Quiz</button>
+        </div>
+      </div>
+      <div id="messages" class="messages"></div>
+    </section>
+
+    <footer class="input-bar">
+      <div id="attachmentRow" class="attachment-row hidden"></div>
+      <div class="format-row" id="formatRow">
+        <button class="format-chip active" data-format="pdf">PDF</button>
+        <button class="format-chip" data-format="docx">DOCX</button>
+        <button class="format-chip" data-format="xlsx">XLSX</button>
+      </div>
+      <div class="input-pill">
+        <button id="attachBtn" class="attach-btn" aria-label="Attach file" title="Attach a file">📎</button>
+        <input type="file" id="fileInput" multiple accept="image/*,.txt,.csv,.md,.json,.log" style="display:none" />
+        <textarea id="promptInput" placeholder="Describe the document you want..." rows="1"></textarea>
+        <button id="sendBtn" class="send-btn" aria-label="Generate">➤</button>
+      </div>
+    </footer>
+  </main>
+</div>
+
+  <!-- Auth Screen -->
+  <div id="authScreen" class="auth-screen hidden">
+    <div class="auth-card">
+      <div class="spark">✦</div>
+      <div class="auth-title" id="authTitle">Create your account</div>
+      <div class="auth-sub" id="authSub">Sign up to start generating documents</div>
+
+      <label class="field-label">Name</label>
+      <input id="authName" type="text" class="text-input" placeholder="Your name" />
+
+      <label class="field-label">Email</label>
+      <input id="authEmail" type="email" class="text-input" placeholder="you@example.com" />
+
+      <label class="field-label">Password</label>
+      <input id="authPassword" type="password" class="text-input" placeholder="••••••••" />
+
+      <div id="authError" class="auth-error hidden"></div>
+
+      <button id="authSubmit" class="save-btn">Create account</button>
+      <div class="auth-switch">
+        <span id="authSwitchText">Already have an account?</span>
+        <button id="authSwitchBtn" class="link-btn">Log in</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <span>Settings</span>
+        <button id="closeSettings" class="icon-btn">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <label class="field-label">OpenRouter API Key</label>
+        <input id="apiKeyInput" type="password" placeholder="sk-or-v1-..." class="text-input" />
+        <div class="hint">Stored only on this device. Get a key at openrouter.ai</div>
+
+        <label class="field-label">Model</label>
+        <input id="modelInput" type="text" placeholder="e.g. google/gemini-3.7-flash" class="text-input" />
+
+        <label class="field-label">Theme</label>
+        <div class="theme-options">
+          <button class="theme-btn" data-theme="dark">Dark</button>
+          <button class="theme-btn" data-theme="light">Light</button>
+          <button class="theme-btn" data-theme="midnight">Midnight Blue</button>
+        </div>
+
+        <button id="saveSettings" class="save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Libraries for document generation -->
+  <script src="pdfmake.min.js?v=6"></script>
+  <script src="vfs_fonts.js?v=6"></script>
+  <script src="docx.umd.js?v=6"></script>
+  <script src="exceljs.min.js?v=6"></script>
+
+  <script src="app.js?v=6"></script>
+</body>
+</html>
