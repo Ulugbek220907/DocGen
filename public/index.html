@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>DocGen AI</title>
-<link rel="stylesheet" href="style.css?v=6" />
+<link rel="stylesheet" href="style.css?v=7" />
 </head>
 <body>
 
@@ -120,12 +120,9 @@
       </div>
 
       <div class="modal-body">
-        <label class="field-label">OpenRouter API Key</label>
-        <input id="apiKeyInput" type="password" placeholder="sk-or-v1-..." class="text-input" />
-        <div class="hint">Stored only on this device. Get a key at openrouter.ai</div>
-
-        <label class="field-label">Model</label>
-        <input id="modelInput" type="text" placeholder="e.g. google/gemini-3.7-flash" class="text-input" />
+        <label class="field-label">Plan</label>
+        <div id="planStatusText" class="plan-status">Loading plan…</div>
+        <button id="upgradeBtn" class="save-btn hidden">Upgrade to Pro</button>
 
         <label class="field-label">Theme</label>
         <div class="theme-options">
@@ -133,8 +130,34 @@
           <button class="theme-btn" data-theme="light">Light</button>
           <button class="theme-btn" data-theme="midnight">Midnight Blue</button>
         </div>
+      </div>
+    </div>
+  </div>
 
-        <button id="saveSettings" class="save-btn">Save</button>
+  <!-- Upgrade Modal -->
+  <div id="upgradeModal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <span>Upgrade to Pro</span>
+        <button id="closeUpgrade" class="icon-btn">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="upgrade-tabs">
+          <button class="upgrade-tab" data-tab="world">🌍 Worldwide</button>
+          <button class="upgrade-tab" data-tab="uz">🇺🇿 O'zbekiston</button>
+        </div>
+
+        <div class="upgrade-panel" data-panel="world">
+          <p class="upgrade-price">Pro — billed monthly via card, PayPal, and more</p>
+          <button id="paddleCheckoutBtn" class="save-btn">Continue with card</button>
+        </div>
+
+        <div class="upgrade-panel hidden" data-panel="uz">
+          <p class="upgrade-price">Pro — UzCard, Humo, va boshqa mahalliy kartalar</p>
+          <button id="paymeCheckoutBtn" class="save-btn">Payme orqali to'lash</button>
+          <button id="clickCheckoutBtn" class="save-btn">Click orqali to'lash</button>
+        </div>
       </div>
     </div>
   </div>
@@ -145,6 +168,9 @@
   <script src="docx.umd.js?v=6"></script>
   <script src="exceljs.min.js?v=6"></script>
 
-  <script src="app.js?v=6"></script>
+  <!-- Worldwide payment provider (Merchant of Record — handles cards/tax globally) -->
+  <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+
+  <script src="app.js?v=7"></script>
 </body>
 </html>

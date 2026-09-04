@@ -787,6 +787,34 @@ textarea.inline-edit-input { resize: vertical; min-height: 50px; line-height: 1.
   margin-top: 20px;
   cursor: pointer;
 }
+.save-btn:disabled { opacity: 0.6; cursor: default; }
+.save-btn.hidden { display: none; }
+
+/* Plan / billing */
+.plan-status {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.upgrade-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.upgrade-tab {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.upgrade-tab.active { border-color: var(--accent); color: var(--text); }
+.upgrade-panel.hidden { display: none; }
+.upgrade-price { color: var(--text-dim); font-size: 13px; margin: 0 0 8px; }
 
 /* Auth screen */
 .auth-screen {

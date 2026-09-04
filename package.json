@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "android:build": "npx cap sync android && cd android && ./gradlew assembleRelease bundleRelease"
   },
   "license": "MIT",
   "dependencies": {
@@ -18,5 +19,12 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "sharp": "^0.35.4"
   }
 }
