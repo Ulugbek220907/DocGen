@@ -1,12 +1,13 @@
 # DocGen AI
 
-Generate PDF, DOCX, and XLSX documents from plain-language descriptions, powered by any model available through [OpenRouter](https://openrouter.ai) (defaults to Gemini 3.7 Flash). Chat with the AI to draft the document, edit the result inline in the same conversation, and download the finished file.
+Generate PDF, DOCX, and XLSX documents from plain-language descriptions, powered by a pooled AI key on the backend (defaults to Gemini 3.7 Flash via [OpenRouter](https://openrouter.ai)). Chat with the AI to draft the document, edit the result inline in the same conversation, and download the finished file.
 
-Real accounts, hashed passwords, and a real Postgres database — this is no longer a client-only prototype.
+Real accounts, hashed passwords, a real Postgres database, and real subscription billing (worldwide via Paddle, Uzbekistan via Payme/Click) — this is no longer a client-only prototype.
 
 ## Features
 
 - **Real accounts** — registration and login are handled by a Node/Express backend with bcrypt-hashed passwords and signed session tokens, backed by Postgres
+- **Free & Pro plans** — free accounts get a monthly document quota on a pooled AI key (no API key to paste in anymore); Pro is unlimited. See [Plans & billing](#plans--billing)
 - **Chat-driven document generation** — describe what you need, the assistant asks clarifying questions when it needs more detail, and generates a real PDF/DOCX/XLSX when it has enough to work with
 - **Inline document editor** — double-click any text or table cell directly in the chat to edit the generated document's actual content; changes regenerate the real file automatically
 - **Rich formatting** — `**bold**`, `*italic*`, `` `code` ``, `^superscript`, `_subscript`, and real math notation, rendered properly across chat, PDF, and DOCX
@@ -25,11 +26,19 @@ docgen-app/
 ├── auth-routes.js      # /api/auth/register, /login, /me
 ├── require-auth.js     # JWT verification middleware
 ├── db-pool.js          # Postgres connection pool
-├── schema.sql           # Run this once against your database
+├── plans.js             # Free/Pro plan definitions (limits, prices)
+├── usage.js              # Monthly quota check-and-consume
+├── ai-routes.js           # POST /api/generate/stream — pooled-key AI proxy, quota-gated
+├── billing-routes.js       # GET /api/billing/status, POST /api/billing/checkout/*
+├── paddle-webhook.js        # POST /webhooks/paddle — worldwide subscription events
+├── payme-webhook.js          # POST /webhooks/payme — Uzbekistan (Payme Merchant API)
+├── click-webhook.js           # POST /webhooks/click/{prepare,complete} — Uzbekistan (Click)
+├── schema.sql                  # Run this once against your database
 ├── package.json
-├── render.yaml           # One-click Render deployment blueprint
+├── render.yaml                  # One-click Render deployment blueprint
+├── capacitor.config.json         # Android app wrapper config
 ├── .env.example
-└── public/                # The frontend — served as static files
+└── public/                        # The frontend — served as static files
     ├── index.html
     ├── style.css
     ├── app.js
@@ -61,6 +70,8 @@ cp .env.example .env
 Edit `.env`:
 - `DATABASE_URL` — your Postgres connection string
 - `JWT_SECRET` — any long random string (generate one with `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`)
+- `OPENROUTER_API_KEY` — one pooled key for every user, from [openrouter.ai/keys](https://openrouter.ai/keys) (see [Plans & billing](#plans--billing) — users no longer bring their own key)
+- Payment provider variables, only needed once you're ready to accept real payments — see [Plans & billing](#plans--billing) below. The app runs fine without them; upgrade buttons just won't do anything yet.
 
 **4. Run it**
 
@@ -68,16 +79,28 @@ Edit `.env`:
 npm start
 ```
 
-Open `http://localhost:3000`. Register an account (this now creates a real row in your database, not `localStorage`), then open **Settings** and paste an [OpenRouter API key](https://openrouter.ai/keys). The model field defaults to `google/gemini-3.7-flash` but accepts any OpenRouter model string.
+Open `http://localhost:3000` and register an account (this creates a real row in your database, not `localStorage`). Free accounts get a monthly document quota on the pooled key set above; no per-user API key to configure anymore.
+
+## Plans & billing
+
+- **Free** — a monthly document quota (`plans.js`) on the server's pooled OpenRouter key.
+- **Pro** — unlimited, billed monthly. Two payment rails, both optional until configured:
+  - **Worldwide** — [Paddle](https://paddle.com) as Merchant of Record (handles cards, VAT/tax, and payout — this sidesteps Stripe's country-restricted merchant onboarding, since Uzbekistan isn't a supported Stripe country). Set `PADDLE_CLIENT_TOKEN`, `PADDLE_PRICE_ID`, `PADDLE_WEBHOOK_SECRET` and point a Paddle webhook destination at `/webhooks/paddle`.
+  - **Uzbekistan** — [Payme](https://business.payme.uz) and [Click](https://merchant.click.uz), the two dominant local processors (needed because UzCard/Humo, most local cards, don't route through Paddle). Set `PAYME_MERCHANT_ID`/`PAYME_KEY` and `CLICK_SERVICE_ID`/`CLICK_MERCHANT_ID`/`CLICK_SECRET_KEY`; their dashboards need callback URLs `/webhooks/payme` and `/webhooks/click/{prepare,complete}` respectively.
+
+All three require you to independently register a merchant account with that provider (identity/business verification) — see `.env.example` for exact variable names and where to find each one. Until real credentials are set, the "Upgrade" flow shows a friendly "not configured yet" message instead of erroring.
+
+A user's plan is never set directly by the app — only a verified webhook from one of these three providers changes `users.plan`, so the source of truth always matches what was actually paid for.
 
 ## Deploying to Render
 
 **Important — read this before pushing to GitHub:** make sure `public/` actually exists as a folder in your repo with all 7 files inside it. If you're adding files one at a time through GitHub's web UI, type the full path (e.g. `public/index.html`) into the "Name your file" box when creating each one — GitHub creates the folder automatically from that. If you drag-and-drop files instead, make sure you drag the whole `public` folder, not just its contents. A missing file here won't crash the server, but a missing `public/` folder will mean nothing loads when you visit the site.
 
-1. Push this repo to GitHub — double-check on GitHub.com afterward that you see `server.js`, `auth-routes.js`, `require-auth.js`, `db-pool.js`, `schema.sql`, `package.json`, `render.yaml`, and a `public/` folder containing all 7 frontend files, all sitting at the root of the repo
+1. Push this repo to GitHub — double-check on GitHub.com afterward that you see `server.js` and all the other root-level `.js` files listed in [Project structure](#project-structure) above, plus a `public/` folder containing all 7 frontend files
 2. In the Render dashboard: **New → Blueprint**, connect the repo
 3. Render provisions the web service and database, and auto-generates `JWT_SECRET` and `DATABASE_URL` for you
-4. Once deployed, connect to the new database and run `schema.sql` against it once (Render's dashboard gives you a `psql` connection command under the database's "Connect" tab)
+4. Once deployed, connect to the new database and run `schema.sql` against it once (Render's dashboard gives you a `psql` connection command under the database's "Connect" tab) — safe to re-run after future updates too, every statement in it is idempotent
+5. Add `OPENROUTER_API_KEY` (required) and whichever payment provider variables from [Plans & billing](#plans--billing) you're ready to use (optional) in the service's Environment tab
 
 **Free-tier caveats worth knowing before you rely on this:**
 - Free web services spin down after 15 minutes of no traffic — the next request pays a ~1 minute cold start
@@ -86,10 +109,12 @@ Open `http://localhost:3000`. Register an account (this now creates a real row i
 
 ## Known limitations
 
-- **Sessions and generated documents are still local-only** (browser `localStorage`), not yet tied to the new account system. Auth now has a real backend; migrating conversation/document history to the database is the natural next step but wasn't in scope for this pass.
-- **The OpenRouter API key still lives in the browser** ("bring your own key"). Anyone with device/browser access can extract it from local storage. Moving to server-side pooled keys (metered per user) is required groundwork for paid plans, and is a separate task from what's built here.
+- **Sessions and generated documents are still local-only** (browser `localStorage`), not yet tied to the account system. Migrating conversation/document history to the database is the natural next step but wasn't in scope for this pass.
 - **No password reset flow.** Only register/login exist right now.
-- **No automated tests.** The auth routes were manually verified end-to-end against a real Postgres instance during development, but there's no test suite guarding against regressions.
+- **No automated tests.** Auth, billing, and the AI proxy were manually verified end-to-end against a real Postgres instance during development (including the full Payme/Click transaction lifecycle and a Paddle webhook signature round-trip), but there's no test suite guarding against regressions.
+- **Payment providers are scaffolded, not activated.** Paddle/Payme/Click integration code is complete and tested against synthetic requests, but real payments only start flowing once you've registered merchant accounts with each provider and set their env vars — see [Plans & billing](#plans--billing).
+- **Plan/pricing numbers are placeholders.** `plans.js` ships with example limits and prices (5 free docs/month, $9 or 49,000 UZS for Pro) — tune them for your actual business before launch.
+- **No self-serve "manage/cancel subscription" UI.** Paddle has a hosted customer portal you can link to once you have a real account; Payme/Click don't have a recurring-subscription concept, so a Pro period bought through them simply expires unless renewed.
 
 ## Roadmap ideas
 
@@ -97,8 +122,45 @@ Open `http://localhost:3000`. Register an account (this now creates a real row i
 - Password reset via email
 - Branded templates (logo, color scheme, font persisted per user, applied to every generated document)
 - Shareable read-only links for generated documents
-- Paid plans: server-side pooled OpenRouter key, usage metering, Stripe integration
-- Capacitor wrapper for an installable Android/iOS build
+- Self-serve subscription management (Paddle customer portal link, Payme/Click renewal reminders)
+- iOS build alongside the Android one (see [Android app](#android-app))
+
+## Android app
+
+`android/` is a [Capacitor](https://capacitorjs.com) wrapper — a thin native
+shell that loads the deployed web app at the URL in `capacitor.config.json`
+(`server.url`). It's not an offline bundle: this app needs the real
+Node/Postgres backend running somewhere reachable, same as the website.
+
+**Before your first real build:** `capacitor.config.json`'s `server.url` is
+currently a placeholder (`https://docgen-app.onrender.com`). Once you've
+deployed for real (see [Deploying to Render](#deploying-to-render)), update
+that one line to your actual URL, then rebuild:
+
+```bash
+npx cap sync android
+cd android && ./gradlew assembleRelease bundleRelease
+```
+
+Outputs land in `android/app/build/outputs/apk/release/app-release.apk`
+(sideload/testing) and `android/app/build/outputs/bundle/release/app-release.aab`
+(**this is the file Play Console wants** — Google has required `.aab`, not
+`.apk`, for new Play Store listings since 2021).
+
+**Signing:** both are already signed with a real release keystore
+(`docgen-upload` alias) delivered alongside this build — see the keystore
+handoff for exactly where. Gradle picks it up automatically via
+`android/keystore.properties` (gitignored — never commit it or the
+`.keystore` file itself). **Back up both immediately and somewhere safe.**
+Losing them means you can never ship an update to this app once it's live
+on the Play Store under `com.docgen.app` — Google would treat any rebuild
+with a different key as a different app.
+
+**Play Console basics:** create an app, choose "production" (or "internal
+testing" first, recommended), upload the `.aab`, fill in the store listing
+(the icon/splash already baked in came from `assets/` at the repo root —
+regenerate with `npx capacitor-assets generate --android` if you swap the
+source art), and submit for review.
 
 ## License
 

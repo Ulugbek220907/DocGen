@@ -1,0 +1,10 @@
+{
+  "appId": "com.docgen.app",
+  "appName": "DocGen AI",
+  "webDir": "public",
+  "server": {
+    "url": "https://docgen-app.onrender.com",
+    "cleartext": false,
+    "androidScheme": "https"
+  }
+}

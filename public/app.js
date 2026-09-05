@@ -1,13 +1,11 @@
 // ---------- State ----------
 const state = {
-  apiKey: localStorage.getItem('or_api_key') || '',
-  model: localStorage.getItem('or_model') || 'google/gemini-3.7-flash',
   theme: localStorage.getItem('theme') || 'dark',
-  format: 'pdf'
+  format: 'pdf',
+  billing: null // { plan, usageCount, limit, remaining } — populated after login
 };
 
 applyTheme(state.theme);
-updatePlanLabel();
 
 // ---------- Auth (real backend — register/login/session are handled by the
 // server, which hashes passwords and issues a signed token) ----------
@@ -131,7 +129,8 @@ authSubmit.addEventListener('click', async () => {
 
 function onLoginSuccess(user) {
   currentUser = user;
-  document.getElementById('planLabel').textContent = state.apiKey ? `Model: ${state.model}` : 'No API key set';
+  document.getElementById('planLabel').textContent = 'Loading plan…';
+  refreshBillingStatus();
   const userNameEl = document.querySelector('.user-name');
   if (userNameEl) userNameEl.textContent = user.name || 'Account';
   const avatarEl = document.querySelector('.avatar');
@@ -179,9 +178,16 @@ const newChatBtn = document.getElementById('newChatBtn');
 const settingsModal = document.getElementById('settingsModal');
 const openSettingsBtn = document.getElementById('openSettings');
 const closeSettingsBtn = document.getElementById('closeSettings');
-const saveSettingsBtn = document.getElementById('saveSettings');
-const apiKeyInput = document.getElementById('apiKeyInput');
-const modelInput = document.getElementById('modelInput');
+const planStatusText = document.getElementById('planStatusText');
+const upgradeBtn = document.getElementById('upgradeBtn');
+
+const upgradeModal = document.getElementById('upgradeModal');
+const closeUpgradeBtn = document.getElementById('closeUpgrade');
+const upgradeTabs = document.querySelectorAll('.upgrade-tab');
+const upgradePanels = document.querySelectorAll('.upgrade-panel');
+const paddleCheckoutBtn = document.getElementById('paddleCheckoutBtn');
+const paymeCheckoutBtn = document.getElementById('paymeCheckoutBtn');
+const clickCheckoutBtn = document.getElementById('clickCheckoutBtn');
 
 const promptInput = document.getElementById('promptInput');
 const sendBtn = document.getElementById('sendBtn');
@@ -189,8 +195,6 @@ const messagesEl = document.getElementById('messages');
 const greetingEl = document.getElementById('greeting');
 const formatRow = document.getElementById('formatRow');
 
-apiKeyInput.value = state.apiKey;
-modelInput.value = state.model;
 document.querySelectorAll('.theme-btn').forEach(btn => {
   if (btn.dataset.theme === state.theme) btn.classList.add('active');
   btn.addEventListener('click', () => {
@@ -228,19 +232,10 @@ newChatBtn.addEventListener('click', () => {
 });
 
 // ---------- Settings modal ----------
-function openSettings() { settingsModal.classList.remove('hidden'); }
+function openSettings() { settingsModal.classList.remove('hidden'); refreshBillingStatus(); }
 function closeSettings() { settingsModal.classList.add('hidden'); }
 openSettingsBtn.addEventListener('click', openSettings);
 closeSettingsBtn.addEventListener('click', closeSettings);
-
-saveSettingsBtn.addEventListener('click', () => {
-  state.apiKey = apiKeyInput.value.trim();
-  state.model = modelInput.value.trim() || 'openai/gpt-4o-mini';
-  localStorage.setItem('or_api_key', state.apiKey);
-  localStorage.setItem('or_model', state.model);
-  updatePlanLabel();
-  closeSettings();
-});
 
 function applyTheme(theme) {
   state.theme = theme;
@@ -248,11 +243,82 @@ function applyTheme(theme) {
   localStorage.setItem('theme', theme);
 }
 
-function updatePlanLabel() {
-  document.getElementById('planLabel').textContent = state.apiKey
-    ? `Model: ${state.model}`
-    : 'No API key set';
+// ---------- Plan & billing ----------
+// Pulls the caller's real plan/usage from the server (source of truth is the
+// `users` row, updated only by webhooks — see billing-routes.js) and reflects
+// it in both the sidebar label and the Settings modal.
+async function refreshBillingStatus() {
+  try {
+    const data = await apiFetch('/api/billing/status');
+    state.billing = data;
+    const planLabel = document.getElementById('planLabel');
+    const planName = data.plan === 'pro' ? 'Pro' : 'Free';
+    const usageText = data.limit === null
+      ? 'Unlimited documents'
+      : `${data.usageCount} / ${data.limit} documents this month`;
+    if (planLabel) planLabel.textContent = `${planName} plan`;
+    if (planStatusText) planStatusText.textContent = `${planName} — ${usageText}`;
+    if (upgradeBtn) upgradeBtn.classList.toggle('hidden', data.plan === 'pro');
+  } catch (err) {
+    console.error('Could not load billing status:', err);
+    const planLabel = document.getElementById('planLabel');
+    if (planLabel) planLabel.textContent = 'Plan unavailable';
+  }
 }
+
+function openUpgradeModal() {
+  closeSettings();
+  upgradeModal.classList.remove('hidden');
+  // Default tab: Uzbekistan timezone -> local providers, everyone else -> worldwide.
+  const isUzbekistan = Intl.DateTimeFormat().resolvedOptions().timeZone === 'Asia/Tashkent';
+  setUpgradeTab(isUzbekistan ? 'uz' : 'world');
+}
+function closeUpgradeModal() { upgradeModal.classList.add('hidden'); }
+
+function setUpgradeTab(tab) {
+  upgradeTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+  upgradePanels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.panel !== tab));
+}
+
+upgradeBtn?.addEventListener('click', openUpgradeModal);
+closeUpgradeBtn?.addEventListener('click', closeUpgradeModal);
+upgradeTabs.forEach(btn => btn.addEventListener('click', () => setUpgradeTab(btn.dataset.tab)));
+
+paddleCheckoutBtn?.addEventListener('click', async () => {
+  paddleCheckoutBtn.disabled = true;
+  try {
+    const { priceId, clientToken, environment } = await apiFetch('/api/billing/checkout/paddle', { method: 'POST' });
+    if (!clientToken || !priceId) {
+      throw new Error('Payments aren’t configured yet — check back soon.');
+    }
+    if (!window.Paddle) throw new Error('Payment provider failed to load. Please try again.');
+    if (environment) window.Paddle.Environment.set(environment);
+    window.Paddle.Initialize({ token: clientToken });
+    window.Paddle.Checkout.open({
+      items: [{ priceId, quantity: 1 }],
+      customer: currentUser?.email ? { email: currentUser.email } : undefined,
+      customData: { user_id: currentUser?.id }
+    });
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    paddleCheckoutBtn.disabled = false;
+  }
+});
+
+async function startLocalCheckout(provider, btn) {
+  btn.disabled = true;
+  try {
+    const data = await apiFetch(`/api/billing/checkout/${provider}`, { method: 'POST' });
+    if (!data.url) throw new Error('Payments aren’t configured yet — check back soon.');
+    window.location.href = data.url;
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+}
+paymeCheckoutBtn?.addEventListener('click', () => startLocalCheckout('payme', paymeCheckoutBtn));
+clickCheckoutBtn?.addEventListener('click', () => startLocalCheckout('click', clickCheckoutBtn));
 
 // ---------- Format selection ----------
 formatRow.addEventListener('click', (e) => {
@@ -550,14 +616,15 @@ async function handleSend() {
   const prompt = promptInput.value.trim();
   if (!prompt && pendingAttachments.length === 0) return;
 
-  if (!state.apiKey) {
-    openSettings();
-    return;
-  }
-
   // Capture the chip selection at the moment of sending, so it can't be
   // affected by anything that changes state.format later in this same flow.
   const selectedFormatAtSend = state.format;
+
+  // One id per user-initiated send, reused across every callOpenRouter()
+  // invocation below (including corrective retries) so the server charges
+  // exactly one unit of monthly quota per document the user actually asked
+  // for, not once per internal retry (see ai-routes.js).
+  const requestId = crypto.randomUUID();
 
   const attachmentsForThisMessage = pendingAttachments;
   pendingAttachments = [];
@@ -631,7 +698,7 @@ async function handleSend() {
   try {
     let result;
     try {
-      result = await callOpenRouter(state.format, setStatus);
+      result = await callOpenRouter(state.format, setStatus, requestId);
     } catch (parseErr) {
       // A malformed-JSON failure (the most common real cause: raw LaTeX-style
       // backslashes in math content breaking JSON string escaping) is worth
@@ -643,7 +710,7 @@ async function handleSend() {
           role: 'user',
           content: 'Your last response was not valid JSON — likely due to unescaped backslashes from LaTeX-style math notation (e.g. \\frac, \\times). Respond again with ONLY strict, valid JSON in the exact format specified. For math, use the ^() and _() notation instead of LaTeX/backslashes.'
         });
-        result = await callOpenRouter(state.format, setStatus);
+        result = await callOpenRouter(state.format, setStatus, requestId);
         conversation.pop(); // remove the corrective nudge from stored history
       } else {
         throw parseErr;
@@ -676,7 +743,7 @@ async function handleSend() {
           role: 'user',
           content: 'Your last response had an empty/placeholder document with no real content. Please write out the FULL requested content now, in the same JSON format.'
         });
-        result = await callOpenRouter(state.format, setStatus);
+        result = await callOpenRouter(state.format, setStatus, requestId);
         conversation.pop(); // remove the corrective nudge from stored history
         if (result.action !== 'generate') {
           throw new Error('The model could not produce the document content. Try rephrasing your request or switching models in Settings.');
@@ -1099,7 +1166,7 @@ function formatAssistantText(raw) {
 // ---------- OpenRouter call ----------
 // The model first decides whether it has enough info to generate a document,
 // or whether it should just reply conversationally (ask questions, chat, etc).
-async function callOpenRouter(defaultFormat, onStatus) {
+async function callOpenRouter(defaultFormat, onStatus, requestId) {
   const systemPrompt = `You are a helpful assistant inside a document-generation app. The currently selected format button in the UI is ${defaultFormat.toUpperCase()}.
 
 Format priority rule (important): use ${defaultFormat.toUpperCase()} unless the user's MOST RECENT message explicitly names a different format (e.g. says "docx", "word doc", "excel", "spreadsheet", "pdf"). Only the latest message counts for this — if a format was mentioned earlier in the conversation but the UI button has since changed and the latest message doesn't repeat a format, follow the current button (${defaultFormat.toUpperCase()}), not the older mention. Don't let an earlier turn's format "stick" across messages.
@@ -1147,38 +1214,43 @@ Rules:
   ];
 
   const baseRequestBody = {
-    model: state.model,
+    model: 'google/gemini-3.7-flash', // advisory only — the server enforces its own allowed-model list
     messages,
     temperature: 0.3,
     max_tokens: 4000,
     response_format: { type: 'json_object' }
   };
 
+  let upgradeRequired = false;
+
   // Streams the completion, reporting live status via onStatus as recognizable
   // pieces of the JSON arrive (action type, then content sections appearing).
   // Returns the full raw text once the stream ends. Throws with a real error
   // message if OpenRouter reports a failure (checked before/after streaming,
   // since errors can arrive either as a non-2xx status or as an SSE error event).
+  // Goes through our own server (ai-routes.js), which holds the pooled
+  // OpenRouter key and enforces the caller's plan/quota — the browser never
+  // sees an AI provider key.
   async function streamOnce(body) {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const res = await fetch('/api/generate/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
-        'Authorization': `Bearer ${state.apiKey}`,
-        'HTTP-Referer': location.href,
-        'X-Title': 'DocGen AI'
+        'Authorization': `Bearer ${getAuthToken()}`,
+        'X-Request-Id': requestId
       },
       body: JSON.stringify({ ...body, stream: true })
     });
 
     if (!res.ok || !res.body) {
-      // Non-streaming failure (bad key, bad model id, etc). Try to read the
-      // error body for a real message.
+      // Non-streaming failure (quota exhausted, bad model id, etc). Try to
+      // read the error body for a real message.
       let errMsg = `HTTP ${res.status}`;
       try {
         const errData = await res.json();
         errMsg = errData?.error?.message || errMsg;
+        if (errData?.error?.upgradeRequired) upgradeRequired = true;
       } catch { /* body wasn't JSON either; keep generic status message */ }
       return { error: errMsg };
     }
@@ -1261,19 +1333,19 @@ Rules:
   if (error && /stream/i.test(error)) {
     onStatus?.('Thinking…');
     try {
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const res = await fetch('/api/generate/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${state.apiKey}`,
-          'HTTP-Referer': location.href,
-          'X-Title': 'DocGen AI'
+          'Authorization': `Bearer ${getAuthToken()}`,
+          'X-Request-Id': requestId
         },
-        body: JSON.stringify(baseRequestBody)
+        body: JSON.stringify({ ...baseRequestBody, stream: false })
       });
       const data = await res.json();
       if (data?.error) {
         error = data.error.message || error;
+        if (data.error.upgradeRequired) upgradeRequired = true;
       } else {
         fullText = data.choices?.[0]?.message?.content || '';
         error = null;
@@ -1282,6 +1354,7 @@ Rules:
   }
 
   if (error) {
+    if (upgradeRequired) openUpgradeModal();
     throw new Error(error);
   }
 

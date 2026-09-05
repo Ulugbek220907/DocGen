@@ -4,6 +4,15 @@ node_modules/
 # Secrets — never commit
 .env
 
+# Android release signing — never commit. keystore.properties holds the
+# passwords; the .keystore file is the actual signing key. Losing either is
+# recoverable (regenerate + re-sign), but leaking them is not.
+android/keystore.properties
+android/app/*.keystore
+android/app/*.jks
+android-keystore/
+android-build-output/
+
 # OS / editor
 .DS_Store
 Thumbs.db
