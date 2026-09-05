@@ -6,6 +6,7 @@ const path = require('path');
 const authRoutes = require('./auth-routes');
 const aiRoutes = require('./ai-routes');
 const billingRoutes = require('./billing-routes');
+const conversationsRoutes = require('./conversations-routes');
 const paddleWebhook = require('./paddle-webhook');
 const paymeWebhook = require('./payme-webhook');
 const clickWebhook = require('./click-webhook');
@@ -38,6 +39,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/generate', aiRoutes);
 app.use('/api/billing', billingRoutes);
+app.use('/api/conversations', conversationsRoutes);
 
 // The frontend (index.html, app.js, style.css, and the vendored libraries)
 // is served straight from this same process — no separate hosting, no CORS.
@@ -49,6 +51,13 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`DocGen AI server running on http://localhost:${PORT}`);
-});
+// Only actually bind a port when run directly (`node server.js` / `npm start`)
+// — the test suite instead does `require('./server').listen(0)` itself, so
+// each test file gets its own ephemeral port with no risk of port conflicts.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`DocGen AI server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

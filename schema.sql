@@ -26,6 +26,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_usage_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_reset_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
+-- Password reset — a hash of the emailed token, never the token itself
+-- (same reasoning as password_hash: a DB leak shouldn't hand out live
+-- credentials). NULL/expired means no reset is in flight.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires_at TIMESTAMPTZ;
+
 -- One row per subscription lifecycle we know about. Paddle subscriptions
 -- live here; Payme/Click are one-off local charges tracked in their own
 -- tables below (those providers don't have a native recurring-subscription
@@ -73,3 +79,32 @@ CREATE TABLE IF NOT EXISTS click_transactions (
   status             TEXT NOT NULL, -- 'prepared' | 'confirmed' | 'cancelled'
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Chat history (previously browser localStorage only — see README > Known
+-- limitations history)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id          TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations (user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id                SERIAL PRIMARY KEY,
+  conversation_id   TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role              TEXT NOT NULL, -- 'user' | 'assistant'
+  content           TEXT NOT NULL,
+  attachment_names  TEXT[],        -- filenames only, same "not recoverable" tradeoff as before
+  file_info         JSONB,         -- { filename, format }
+  document_schema   JSONB,         -- full generation schema, so downloads survive a reload
+  document_format   TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id, id);

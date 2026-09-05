@@ -14,7 +14,8 @@ Real accounts, hashed passwords, a real Postgres database, and real subscription
 - **Live Excel formulas** — table cells starting with `=` become real formulas (`=SUM(B2:B5)`) in generated spreadsheets, not frozen numbers
 - **File attachments** — attach images (to vision-capable models) or text files and ask questions about them
 - **Streaming responses** with live status updates
-- **Session history** — saved locally per browser for now (see [Known limitations](#known-limitations))
+- **Session history synced to your account** — conversations and the document schema behind every generated file are stored in Postgres, tied to `user_id`, so they survive a cache clear and follow you across devices
+- **Password reset via email** — "Forgot password?" on the login screen
 
 ## Project structure
 
@@ -81,6 +82,22 @@ npm start
 
 Open `http://localhost:3000` and register an account (this creates a real row in your database, not `localStorage`). Free accounts get a monthly document quota on the pooled key set above; no per-user API key to configure anymore.
 
+## Testing
+
+```bash
+npm test
+```
+
+Runs the real test suite (`tests/*.test.js`, Node's built-in test runner) against a real Postgres database — no mocks, same philosophy as the manual verification this project was built with. You need a throwaway database with the schema applied:
+
+```bash
+createdb docgen_test
+psql docgen_test -f schema.sql
+DATABASE_URL=postgresql://postgres@localhost:5432/docgen_test JWT_SECRET=any-string-for-tests npm test
+```
+
+Each test file starts its own instance of the server on an ephemeral port (`server.js` only binds a real port when run directly — `require('./server')` just gets you the Express app), so files run safely in parallel and never collide. Covers registration/login validation, the full password-reset lifecycle (including single-use and expiry), free/pro quota gating and the monthly rolling reset, request-id deduplication on the AI proxy, and conversation ownership isolation. Does **not** cover the Paddle/Payme/Click webhook protocol handlers end-to-end (those were verified manually during development — see the commit history) or anything requiring a real OpenRouter key.
+
 ## Plans & billing
 
 - **Free** — a monthly document quota (`plans.js`) on the server's pooled OpenRouter key.
@@ -109,17 +126,15 @@ A user's plan is never set directly by the app — only a verified webhook from 
 
 ## Known limitations
 
-- **Sessions and generated documents are still local-only** (browser `localStorage`), not yet tied to the account system. Migrating conversation/document history to the database is the natural next step but wasn't in scope for this pass.
-- **No password reset flow.** Only register/login exist right now.
-- **No automated tests.** Auth, billing, and the AI proxy were manually verified end-to-end against a real Postgres instance during development (including the full Payme/Click transaction lifecycle and a Paddle webhook signature round-trip), but there's no test suite guarding against regressions.
+- **Attachment content still isn't recoverable after reload.** Text/image file contents sent to the model aren't persisted (only filenames, for display) — same tradeoff as before, just now documented rather than accidental. Re-attach or use the "reuse" chip within the same page load.
+- **Password reset emails need real SMTP credentials to actually send.** Without `SMTP_*` env vars set, the reset link is only printed to the server log — functional for local dev, not for real users. See `.env.example`.
 - **Payment providers are scaffolded, not activated.** Paddle/Payme/Click integration code is complete and tested against synthetic requests, but real payments only start flowing once you've registered merchant accounts with each provider and set their env vars — see [Plans & billing](#plans--billing).
 - **Plan/pricing numbers are placeholders.** `plans.js` ships with example limits and prices (5 free docs/month, $9 or 49,000 UZS for Pro) — tune them for your actual business before launch.
 - **No self-serve "manage/cancel subscription" UI.** Paddle has a hosted customer portal you can link to once you have a real account; Payme/Click don't have a recurring-subscription concept, so a Pro period bought through them simply expires unless renewed.
 
 ## Roadmap ideas
 
-- Move sessions/generated documents into Postgres, tied to `user_id`, so they survive a cache clear and sync across devices
-- Password reset via email
+- Persist attachment content too (not just filenames), so re-opening a conversation doesn't lose what was attached
 - Branded templates (logo, color scheme, font persisted per user, applied to every generated document)
 - Shareable read-only links for generated documents
 - Self-serve subscription management (Paddle customer portal link, Payme/Click renewal reminders)
@@ -164,4 +179,28 @@ source art), and submit for review.
 
 ## License
 
-Add a license of your choice here before publishing.
+MIT — see below (matches the `license` field in `package.json`).
+
+```
+MIT License
+
+Copyright (c) 2026 Ulugbek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
