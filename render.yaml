@@ -14,6 +14,34 @@ services:
         fromDatabase:
           name: docgen-db
           property: connectionString
+      # Required for AI generation — get one at https://openrouter.ai/keys.
+      # sync: false means Render prompts for this during Blueprint setup
+      # instead of deploying with it blank.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ALLOWED_MODELS
+        value: google/gemini-3.7-flash
+      # Payment provider variables — all optional. Leave blank in the
+      # Blueprint setup screen and fill in later (Environment tab) once
+      # you've registered with each provider; see README > Plans & billing.
+      - key: PADDLE_CLIENT_TOKEN
+        sync: false
+      - key: PADDLE_PRICE_ID
+        sync: false
+      - key: PADDLE_WEBHOOK_SECRET
+        sync: false
+      - key: PADDLE_ENVIRONMENT
+        sync: false
+      - key: PAYME_MERCHANT_ID
+        sync: false
+      - key: PAYME_KEY
+        sync: false
+      - key: CLICK_SERVICE_ID
+        sync: false
+      - key: CLICK_MERCHANT_ID
+        sync: false
+      - key: CLICK_SECRET_KEY
+        sync: false
 
 databases:
   - name: docgen-db
