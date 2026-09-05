@@ -132,10 +132,10 @@ shell that loads the deployed web app at the URL in `capacitor.config.json`
 (`server.url`). It's not an offline bundle: this app needs the real
 Node/Postgres backend running somewhere reachable, same as the website.
 
-**Before your first real build:** `capacitor.config.json`'s `server.url` is
-currently a placeholder (`https://docgen-app.onrender.com`). Once you've
-deployed for real (see [Deploying to Render](#deploying-to-render)), update
-that one line to your actual URL, then rebuild:
+`capacitor.config.json`'s `server.url` currently points at the live deployment
+(`https://docgen-app-qpuo.onrender.com`). If you ever redeploy to a new URL
+(a different Render service, your own domain, etc.), update that one line
+and rebuild:
 
 ```bash
 npx cap sync android
