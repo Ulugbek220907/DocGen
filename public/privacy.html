@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Privacy Policy — DocGen AI</title>
+<style>
+  :root {
+    --bg: #131314;
+    --bg-elevated: #1e1f20;
+    --text: #e8eaed;
+    --text-dim: #9aa0a6;
+    --accent: #8ab4f8;
+    --border: #3c4043;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --bg-elevated: #f0f2f5;
+      --text: #1f1f1f;
+      --text-dim: #5f6368;
+      --border: #dadce0;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  .updated { color: var(--text-dim); font-size: 13px; margin-bottom: 32px; }
+  h2 { font-size: 18px; margin-top: 36px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  p, li { color: var(--text); }
+  ul { padding-left: 20px; }
+  a { color: var(--accent); }
+  code { background: var(--bg-elevated); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  .home-link { display: inline-block; margin-top: 40px; color: var(--accent); text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Privacy Policy</h1>
+  <div class="updated">DocGen AI — last updated September 2026</div>
+
+  <p>This policy explains what DocGen AI ("the app", "we") collects when you use the website or Android app, and why. If anything here is unclear, contact <a href="mailto:ulugbekisoqov22@gmail.com">ulugbekisoqov22@gmail.com</a>.</p>
+
+  <h2>What we collect</h2>
+  <ul>
+    <li><strong>Account information</strong> — your name and email address when you register. Your password is never stored in readable form; it's hashed (bcrypt) before it touches the database.</li>
+    <li><strong>Conversations and generated documents</strong> — the chat messages you send and the content of documents you generate are stored in our database, tied to your account, so your history is available across sessions and devices. Attached file/image contents are sent to the AI provider to answer your request but are not stored long-term — only the filename is kept, for display in your history.</li>
+    <li><strong>Usage data</strong> — how many documents you've generated this billing period, so free/paid plan limits can be enforced.</li>
+    <li><strong>Payment information</strong> — if you upgrade to Pro, your payment is handled entirely by our payment processor (Paddle for most countries; Payme or Click for Uzbekistan). We never see or store your card number. We do store which plan you're on, when it renews, and an internal transaction reference from the payment processor.</li>
+  </ul>
+
+  <h2>Third parties we share data with</h2>
+  <ul>
+    <li><strong>OpenRouter</strong> (and, through it, whichever underlying AI model is configured, by default Google's Gemini) — receives the text/image content of your requests in order to generate a response or document. See <a href="https://openrouter.ai/privacy" target="_blank" rel="noopener">OpenRouter's privacy policy</a>.</li>
+    <li><strong>Paddle, Payme, and Click</strong> — receive whatever information they require to process a payment (typically your email and payment method) if you subscribe to Pro. We don't control their data practices; see their own privacy policies.</li>
+    <li><strong>Our hosting provider</strong> (currently Render) — stores the database and runs the server. We don't sell or share your data with anyone else, and we don't run analytics or advertising trackers.</li>
+  </ul>
+
+  <h2>What's stored only on your device</h2>
+  <p>Your login session token and your theme preference (dark/light/midnight) are kept in your browser's or app's local storage, not sent to us beyond the initial login.</p>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li>You can delete any conversation from the sidebar at any time — this permanently deletes it and its messages from our database.</li>
+    <li>You can request full account deletion by emailing <a href="mailto:ulugbekisoqov22@gmail.com">ulugbekisoqov22@gmail.com</a> — we'll remove your account, conversations, and billing records within a reasonable time, except where we're required to keep payment records for legal/tax purposes.</li>
+    <li>You can reset your password at any time from the login screen ("Forgot password?").</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>DocGen AI is not directed at children under 13, and we don't knowingly collect data from them.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>If this policy changes, we'll update the date at the top of this page.</p>
+
+  <a class="home-link" href="/">&larr; Back to DocGen AI</a>
+</div>
+</body>
+</html>

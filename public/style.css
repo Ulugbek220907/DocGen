@@ -846,11 +846,36 @@ textarea.inline-edit-input { resize: vertical; min-height: 50px; line-height: 1.
   padding: 8px 10px;
   border-radius: 8px;
 }
+.auth-info.hidden { display: none; }
+.auth-info {
+  color: var(--accent);
+  font-size: 12px;
+  margin-top: 10px;
+  text-align: left;
+  background: rgba(138, 180, 248, 0.12);
+  border: 1px solid var(--accent);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.forgot-link {
+  display: block;
+  text-align: right;
+  width: 100%;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+.forgot-link.hidden { display: none; }
 .auth-switch {
   margin-top: 16px;
   font-size: 13px;
   color: var(--text-dim);
 }
+.auth-legal {
+  margin-top: 20px;
+  font-size: 12px;
+}
+.auth-legal a { color: var(--text-dim); }
 .link-btn {
   background: none;
   border: none;

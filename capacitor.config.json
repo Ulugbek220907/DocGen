@@ -3,7 +3,7 @@
   "appName": "DocGen AI",
   "webDir": "public",
   "server": {
-    "url": "https://docgen-app.onrender.com",
+    "url": "https://docgen-app-qpuo.onrender.com",
     "cleartext": false,
     "androidScheme": "https"
   }

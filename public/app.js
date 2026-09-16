@@ -16,14 +16,25 @@ const authSub = document.getElementById('authSub');
 const authName = document.getElementById('authName');
 const authNameLabel = authName.previousElementSibling;
 const authEmail = document.getElementById('authEmail');
+const authEmailLabel = authEmail.previousElementSibling;
 const authPassword = document.getElementById('authPassword');
+const authPasswordLabel = authPassword.previousElementSibling;
+const authForgotLink = document.getElementById('authForgotLink');
 const authError = document.getElementById('authError');
+const authInfo = document.getElementById('authInfo');
 const authSubmit = document.getElementById('authSubmit');
 const authSwitchText = document.getElementById('authSwitchText');
 const authSwitchBtn = document.getElementById('authSwitchBtn');
 
-let authMode = 'register'; // or 'login'
+let authMode = 'register'; // 'register' | 'login' | 'forgot' | 'reset'
 let currentUser = null; // { id, name, email }
+
+// A password-reset email link lands here as /?resetToken=... — grab it
+// before anything else touches the URL, then scrub it from the address bar.
+const pendingResetToken = new URLSearchParams(location.search).get('resetToken');
+if (pendingResetToken) {
+  window.history.replaceState({}, '', location.pathname);
+}
 
 function getAuthToken() {
   return localStorage.getItem('auth_token');
@@ -59,6 +70,22 @@ function showApp() {
 function setAuthMode(mode) {
   authMode = mode;
   authError.classList.add('hidden');
+  authInfo.classList.add('hidden');
+  authForgotLink.classList.add('hidden');
+  authName.value = '';
+  authPassword.value = '';
+
+  // Reset to the register/login shape, then each branch below hides what
+  // it doesn't need.
+  authNameLabel.style.display = 'none';
+  authName.style.display = 'none';
+  authEmailLabel.style.display = 'block';
+  authEmail.style.display = 'block';
+  authPasswordLabel.style.display = 'block';
+  authPassword.style.display = 'block';
+  authPasswordLabel.textContent = 'Password';
+  authSwitchText.style.display = 'inline';
+
   if (mode === 'register') {
     authTitle.textContent = 'Create your account';
     authSub.textContent = 'Sign up to start generating documents';
@@ -67,20 +94,42 @@ function setAuthMode(mode) {
     authSubmit.textContent = 'Create account';
     authSwitchText.textContent = 'Already have an account?';
     authSwitchBtn.textContent = 'Log in';
-  } else {
+  } else if (mode === 'login') {
     authTitle.textContent = 'Welcome back';
     authSub.textContent = 'Log in to continue';
-    authNameLabel.style.display = 'none';
-    authName.style.display = 'none';
     authSubmit.textContent = 'Log in';
     authSwitchText.textContent = "Don't have an account?";
     authSwitchBtn.textContent = 'Sign up';
+    authForgotLink.classList.remove('hidden');
+  } else if (mode === 'forgot') {
+    authTitle.textContent = 'Reset your password';
+    authSub.textContent = "Enter your email and we'll send you a reset link";
+    authPasswordLabel.style.display = 'none';
+    authPassword.style.display = 'none';
+    authSubmit.textContent = 'Send reset link';
+    authSwitchText.style.display = 'none';
+    authSwitchBtn.textContent = 'Back to log in';
+  } else if (mode === 'reset') {
+    authTitle.textContent = 'Set a new password';
+    authSub.textContent = 'Choose a new password for your account';
+    authEmailLabel.style.display = 'none';
+    authEmail.style.display = 'none';
+    authPasswordLabel.textContent = 'New password';
+    authSubmit.textContent = 'Reset password';
+    authSwitchText.style.display = 'none';
+    authSwitchBtn.textContent = 'Back to log in';
   }
 }
 
 authSwitchBtn.addEventListener('click', () => {
-  setAuthMode(authMode === 'register' ? 'login' : 'register');
+  if (authMode === 'forgot' || authMode === 'reset') {
+    setAuthMode('login');
+  } else {
+    setAuthMode(authMode === 'register' ? 'login' : 'register');
+  }
 });
+
+authForgotLink.addEventListener('click', () => setAuthMode('forgot'));
 
 // Allow pressing Enter in any auth field to submit
 [authName, authEmail, authPassword].forEach(input => {
@@ -92,10 +141,59 @@ authSwitchBtn.addEventListener('click', () => {
   });
 });
 
+async function submitAuthAction(endpoint, body, { onSuccess, busyLabel }) {
+  authError.classList.add('hidden');
+  authInfo.classList.add('hidden');
+  authSubmit.disabled = true;
+  const originalLabel = authSubmit.textContent;
+  authSubmit.textContent = busyLabel;
+  try {
+    const data = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(body) });
+    onSuccess(data);
+  } catch (err) {
+    authError.textContent = err.message;
+    authError.classList.remove('hidden');
+  } finally {
+    authSubmit.disabled = false;
+    authSubmit.textContent = originalLabel;
+  }
+}
+
 authSubmit.addEventListener('click', async () => {
   const email = authEmail.value.trim().toLowerCase();
   const password = authPassword.value;
   const name = authName.value.trim();
+
+  if (authMode === 'forgot') {
+    if (!email) {
+      authError.textContent = 'Please enter your email.';
+      authError.classList.remove('hidden');
+      return;
+    }
+    return submitAuthAction('/api/auth/forgot-password', { email }, {
+      busyLabel: 'Sending…',
+      onSuccess: (data) => {
+        authInfo.textContent = data.message;
+        authInfo.classList.remove('hidden');
+      }
+    });
+  }
+
+  if (authMode === 'reset') {
+    if (!password || password.length < 8) {
+      authError.textContent = 'Password must be at least 8 characters.';
+      authError.classList.remove('hidden');
+      return;
+    }
+    return submitAuthAction('/api/auth/reset-password', { token: pendingResetToken, password }, {
+      busyLabel: 'Resetting…',
+      onSuccess: (data) => {
+        authInfo.textContent = data.message;
+        authInfo.classList.remove('hidden');
+        setTimeout(() => setAuthMode('login'), 1500);
+      }
+    });
+  }
 
   if (!email || !password) {
     authError.textContent = 'Please fill in email and password.';
@@ -108,29 +206,22 @@ authSubmit.addEventListener('click', async () => {
     return;
   }
 
-  authSubmit.disabled = true;
-  const originalLabel = authSubmit.textContent;
-  authSubmit.textContent = authMode === 'register' ? 'Creating account…' : 'Logging in…';
-
-  try {
-    const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-    const body = authMode === 'register' ? { name, email, password } : { email, password };
-    const data = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(body) });
-    setAuthToken(data.token);
-    onLoginSuccess(data.user);
-  } catch (err) {
-    authError.textContent = err.message;
-    authError.classList.remove('hidden');
-  } finally {
-    authSubmit.disabled = false;
-    authSubmit.textContent = originalLabel;
-  }
+  const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+  const body = authMode === 'register' ? { name, email, password } : { email, password };
+  return submitAuthAction(endpoint, body, {
+    busyLabel: authMode === 'register' ? 'Creating account…' : 'Logging in…',
+    onSuccess: (data) => {
+      setAuthToken(data.token);
+      onLoginSuccess(data.user);
+    }
+  });
 });
 
 function onLoginSuccess(user) {
   currentUser = user;
   document.getElementById('planLabel').textContent = 'Loading plan…';
   refreshBillingStatus();
+  loadConversationList().then(renderHistory);
   const userNameEl = document.querySelector('.user-name');
   if (userNameEl) userNameEl.textContent = user.name || 'Account';
   const avatarEl = document.querySelector('.avatar');
@@ -141,6 +232,12 @@ function onLoginSuccess(user) {
 // On load: if a token is stored, verify it's still valid with the server
 // (rather than trusting it blindly) before showing the app.
 (async function checkExistingSession() {
+  if (pendingResetToken) {
+    setAuthMode('reset');
+    showAuth();
+    return;
+  }
+
   const token = getAuthToken();
   if (!token) {
     setAuthMode('register');
@@ -164,6 +261,9 @@ function performLogout() {
   authPassword.value = '';
   authName.value = '';
   currentUser = null;
+  sessions = [];
+  currentSessionId = null;
+  conversation = [];
   setAuthMode('login');
   showAuth();
 }
@@ -347,14 +447,19 @@ document.getElementById('templateChips').addEventListener('click', (e) => {
   }
 });
 
-// ---------- Chat sessions (each = one conversation, with its own messages) ----------
-let sessions = JSON.parse(localStorage.getItem('chat_sessions') || '[]');
+// ---------- Chat sessions (each = one conversation, stored server-side and
+// tied to the account — see conversations-routes.js) ----------
+let sessions = []; // lightweight list: { id, title, updatedAt } — loaded after login
 let currentSessionId = null;
 
-function saveSessions() {
-  // Cap how many sessions we keep so localStorage doesn't grow unbounded.
-  sessions = sessions.slice(0, 40);
-  localStorage.setItem('chat_sessions', JSON.stringify(sessions));
+async function loadConversationList() {
+  try {
+    const data = await apiFetch('/api/conversations');
+    sessions = data.conversations;
+  } catch (err) {
+    console.error('Could not load conversation history:', err);
+    sessions = [];
+  }
 }
 
 function renderHistory() {
@@ -384,9 +489,13 @@ function renderHistory() {
   });
 }
 
-function deleteSession(id) {
+async function deleteSession(id) {
+  try {
+    await apiFetch(`/api/conversations/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error('Could not delete conversation:', err);
+  }
   sessions = sessions.filter(s => s.id !== id);
-  saveSessions();
   if (currentSessionId === id) {
     startNewConversation();
   } else {
@@ -394,14 +503,19 @@ function deleteSession(id) {
   }
 }
 
-function loadSession(id) {
-  const session = sessions.find(s => s.id === id);
-  if (!session) return;
+async function loadSession(id) {
+  let data;
+  try {
+    data = await apiFetch(`/api/conversations/${id}`);
+  } catch (err) {
+    console.error('Could not load conversation:', err);
+    return;
+  }
   currentSessionId = id;
-  conversation = session.messages.map(m => ({ role: m.role, content: m.content }));
+  conversation = data.messages.map(m => ({ role: m.role, content: m.content }));
   messagesEl.innerHTML = '';
   greetingEl.style.display = 'none';
-  session.messages.forEach(m => {
+  data.messages.forEach(m => {
     if (m.role === 'user') {
       let html = escapeHtml(m.content).replace(/\n/g, '<br>');
       if (m.attachmentNames && m.attachmentNames.length) {
@@ -413,11 +527,30 @@ function loadSession(id) {
       const el = addMessage('assistant', '');
       if (m.fileInfo) {
         el.innerHTML = `Here's your document.` + fileCardHtml(m.fileInfo.filename, m.fileInfo.format);
-        // Note: the actual file blob isn't kept in storage (too large) —
-        // regenerate on demand if they click Download after reloading a session.
-        el.querySelector('.download-btn').addEventListener('click', () => {
-          alert('This file was generated earlier in a previous session and is no longer cached. Ask me to generate it again to download it.');
-        });
+        const btn = el.querySelector('.download-btn');
+        if (m.documentSchema && m.documentFormat) {
+          // The schema (not the rendered file) is what's actually stored —
+          // rebuild the real file on demand when they click Download.
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Preparing…';
+            try {
+              const { blob, filename } = await buildDocument(m.documentSchema, m.documentFormat);
+              triggerBlobDownload(blob, filename);
+            } catch (err) {
+              alert('Could not rebuild this document: ' + err.message);
+            } finally {
+              btn.disabled = false;
+              btn.textContent = original;
+            }
+          });
+        } else {
+          // Saved before document history existed — nothing to rebuild from.
+          btn.addEventListener('click', () => {
+            alert('This file was generated before document history was saved and can\'t be rebuilt. Ask me to generate it again.');
+          });
+        }
       } else {
         const textHtml = formatAssistantText(m.content);
         el.innerHTML = `<div class="msg-formatted">${textHtml}</div>` + copyBtnHtml();
@@ -438,19 +571,27 @@ function startNewConversation() {
   renderHistory();
 }
 
-function upsertCurrentSession(userText) {
-  let session = sessions.find(s => s.id === currentSessionId);
-  if (!session) {
-    session = {
-      id: 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-      title: userText.slice(0, 60),
-      messages: [],
-      updatedAt: Date.now()
-    };
-    sessions.unshift(session);
-    currentSessionId = session.id;
+// Creates the conversation on the server the first time a session needs one,
+// and reuses it (bumped to the top of the sidebar) for every message after.
+async function getOrCreateSession(title) {
+  if (currentSessionId) {
+    const idx = sessions.findIndex(s => s.id === currentSessionId);
+    if (idx > 0) sessions.unshift(sessions.splice(idx, 1)[0]);
+    return { id: currentSessionId };
   }
-  return session;
+  const data = await apiFetch('/api/conversations', { method: 'POST', body: JSON.stringify({ title }) });
+  currentSessionId = data.id;
+  sessions.unshift({ id: data.id, title: data.title, updatedAt: new Date().toISOString() });
+  return { id: data.id };
+}
+
+// Fire-and-forget: a message failing to persist shouldn't block the chat UI
+// the user is already looking at.
+function saveMessage(conversationId, message) {
+  apiFetch(`/api/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(message)
+  }).catch(err => console.error('Could not save message:', err));
 }
 
 renderHistory();
@@ -631,7 +772,7 @@ async function handleSend() {
   renderAttachmentRow();
 
   const sessionTitleSource = prompt || (attachmentsForThisMessage[0]?.name || 'New conversation');
-  const session = upsertCurrentSession(sessionTitleSource);
+  const session = await getOrCreateSession(sessionTitleSource);
 
   // Build what actually gets shown in the chat bubble: the typed text plus
   // small preview chips for any attached files.
@@ -668,7 +809,7 @@ async function handleSend() {
   // Store a lightweight version in the session — full image data URLs are
   // large, so only filenames are persisted (consistent with how generated
   // files already work: re-attach or regenerate rather than caching forever).
-  session.messages.push({
+  saveMessage(session.id, {
     role: 'user',
     content: displayText,
     attachmentNames: attachmentsForThisMessage.map(a => a.name)
@@ -723,7 +864,7 @@ async function handleSend() {
       loadingEl.innerHTML = `<div class="msg-formatted">${textHtml}</div>` + copyBtnHtml();
       attachCopy(loadingEl, result.message);
       conversation.push({ role: 'assistant', content: result.message });
-      session.messages.push({ role: 'assistant', content: result.message });
+      saveMessage(session.id, { role: 'assistant', content: result.message });
     } else {
       // action === 'generate' — determine format deterministically rather
       // than fully trusting the model: only let the CURRENT message's own
@@ -761,7 +902,13 @@ async function handleSend() {
         + renderInlineDoc(docId);
       const assistantNote = `[Generated ${chosenFormat.toUpperCase()} document: ${filename}]`;
       conversation.push({ role: 'assistant', content: assistantNote });
-      session.messages.push({ role: 'assistant', content: assistantNote, fileInfo: { filename, format: chosenFormat } });
+      saveMessage(session.id, {
+        role: 'assistant',
+        content: assistantNote,
+        fileInfo: { filename, format: chosenFormat },
+        documentSchema: result.schema,
+        format: chosenFormat
+      });
 
       // Keep the format chips in sync with what was actually generated.
       if (chosenFormat !== state.format) {
@@ -772,8 +919,6 @@ async function handleSend() {
       }
     }
 
-    session.updatedAt = Date.now();
-    saveSessions();
     renderHistory();
     scrollToBottom();
   } catch (err) {
@@ -814,19 +959,15 @@ function fileCardHtml(filename, format, docId) {
     </div>`;
 }
 
-// Fallback for reloaded sessions where no cached blob/docId exists.
-function attachDownload(container, blob, filename) {
-  const btn = container.querySelector('.download-btn');
-  btn.addEventListener('click', () => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  });
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // One delegated handler for every "fresh" download button (has a data-doc-id)
@@ -837,14 +978,7 @@ messagesEl.addEventListener('click', (e) => {
   if (!btn || !btn.dataset.docId) return;
   const doc = generatedDocs.get(btn.dataset.docId);
   if (!doc || !doc.blob) return;
-  const url = URL.createObjectURL(doc.blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = doc.filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  triggerBlobDownload(doc.blob, doc.filename);
 });
 
 // ---------- Inline document editor ----------
