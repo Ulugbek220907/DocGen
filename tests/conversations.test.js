@@ -1,99 +1,97 @@
-const { test } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { startServer, request, uniqueEmail, registerUser } = require('./helpers');
+const { startServer, baseUrl, request, generate, registerUser, pool, queueAi, resetAi, sampleDoc } = require('./helpers');
 
-test('conversations: CRUD, ownership isolation, and document schema round-trip', async (t) => {
-  const server = await startServer();
-  const base = `http://localhost:${server.address().port}`;
-  t.after(() => server.close());
+let server;
+let base;
 
-  const { token } = await registerUser(base, { email: uniqueEmail('conv') });
-  const auth = { Authorization: `Bearer ${token}` };
+before(async () => {
+  server = await startServer();
+  base = baseUrl(server);
+});
+after(async () => {
+  server.close();
+  await pool.end();
+});
 
-  let conversationId;
+test('a conversation keeps its messages and links to the documents it made', async () => {
+  resetAi();
+  const { token } = await registerUser(base);
+  queueAi({ action: 'reply', message: 'Sure — what kind?', suggestions: [] });
+  const first = await generate(base, token, { text: 'I need a letter' });
+  const id = first.result.conversationId;
+  queueAi(sampleDoc('Cover Letter'));
+  await generate(base, token, { text: 'a cover letter', conversationId: id, attachments: [{ kind: 'text', name: 'cv.txt', text: 'my cv' }] });
 
-  await t.test('creates a conversation', async () => {
-    const { status, body } = await request(base, '/api/conversations', {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({ title: 'Invoice for Acme' })
-    });
-    assert.equal(status, 201);
-    assert.ok(body.id);
-    conversationId = body.id;
-  });
+  const list = await request(base, '/api/conversations', { token });
+  assert.equal(list.body.conversations.length, 1);
 
-  await t.test('appears in the list, most recent first', async () => {
-    const { status, body } = await request(base, '/api/conversations', { headers: auth });
-    assert.equal(status, 200);
-    assert.ok(body.conversations.some(c => c.id === conversationId));
-  });
+  const convo = await request(base, `/api/conversations/${id}`, { token });
+  assert.equal(convo.status, 200);
+  assert.deepEqual(convo.body.messages.map(m => m.role), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(convo.body.messages[2].attachmentNames, ['cv.txt']);
+  assert.equal(convo.body.messages[3].document.title, 'Cover Letter');
+  assert.equal(convo.body.messages[3].document.format, 'pdf');
+});
 
-  await t.test('stores messages, including the document schema needed to rebuild a download', async () => {
-    await request(base, `/api/conversations/${conversationId}/messages`, {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({ role: 'user', content: 'Make an invoice for $500' })
-    });
-    await request(base, `/api/conversations/${conversationId}/messages`, {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({
-        role: 'assistant',
-        content: '[Generated PDF document: invoice.pdf]',
-        fileInfo: { filename: 'invoice.pdf', format: 'pdf' },
-        documentSchema: { title: 'Invoice', sections: [{ heading: '', paragraphs: ['Amount: $500'] }] },
-        format: 'pdf'
-      })
-    });
+test('rename and delete; deleting a chat keeps its documents', async () => {
+  resetAi();
+  const { token } = await registerUser(base);
+  queueAi(sampleDoc('Keeper'));
+  const gen = await generate(base, token, { text: 'make it' });
+  const id = gen.result.conversationId;
 
-    const { status, body } = await request(base, `/api/conversations/${conversationId}`, { headers: auth });
-    assert.equal(status, 200);
-    assert.equal(body.messages.length, 2);
-    assert.equal(body.messages[0].role, 'user');
-    assert.equal(body.messages[1].fileInfo.filename, 'invoice.pdf');
-    assert.equal(body.messages[1].documentFormat, 'pdf');
-    assert.deepEqual(body.messages[1].documentSchema.sections[0].paragraphs, ['Amount: $500']);
-  });
+  const rename = await request(base, `/api/conversations/${id}`, { method: 'PATCH', token, body: { title: 'Renamed chat' } });
+  assert.equal(rename.status, 200);
+  const empty = await request(base, `/api/conversations/${id}`, { method: 'PATCH', token, body: { title: ' ' } });
+  assert.equal(empty.status, 400);
 
-  await t.test('rejects an invalid message role', async () => {
-    const { status } = await request(base, `/api/conversations/${conversationId}/messages`, {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({ role: 'system', content: 'nope' })
-    });
-    assert.equal(status, 400);
-  });
+  const del = await request(base, `/api/conversations/${id}`, { method: 'DELETE', token });
+  assert.equal(del.status, 200);
+  const gone = await request(base, `/api/conversations/${id}`, { token });
+  assert.equal(gone.status, 404);
 
-  await t.test("another user can't read, post to, or delete this conversation", async () => {
-    const { token: otherToken } = await registerUser(base, { email: uniqueEmail('conv-other') });
-    const otherAuth = { Authorization: `Bearer ${otherToken}` };
+  const docs = await request(base, '/api/documents', { token });
+  assert.equal(docs.body.documents.length, 1);
+  assert.equal(docs.body.documents[0].conversationId, null);
 
-    const get = await request(base, `/api/conversations/${conversationId}`, { headers: otherAuth });
-    assert.equal(get.status, 404);
+  // The orphaned document can still be edited with AI (a new chat is made).
+  queueAi(sampleDoc('Keeper v2', { target: 'update' }));
+  const edit = await generate(base, token, { text: 'polish it', documentId: docs.body.documents[0].id });
+  assert.equal(edit.result.document.title, 'Keeper v2');
+  assert.ok(edit.result.conversationId);
+});
 
-    const post = await request(base, `/api/conversations/${conversationId}/messages`, {
-      method: 'POST',
-      headers: otherAuth,
-      body: JSON.stringify({ role: 'user', content: 'sneaky' })
-    });
-    assert.equal(post.status, 404);
+test("other users' chats are invisible", async () => {
+  resetAi();
+  const a = await registerUser(base);
+  const b = await registerUser(base);
+  queueAi({ action: 'reply', message: 'hi', suggestions: [] });
+  const gen = await generate(base, a.token, { text: 'hello' });
+  const id = gen.result.conversationId;
+  assert.equal((await request(base, `/api/conversations/${id}`, { token: b.token })).status, 404);
+  assert.equal((await request(base, `/api/conversations/${id}`, { method: 'PATCH', token: b.token, body: { title: 'x' } })).status, 404);
+  await request(base, `/api/conversations/${id}`, { method: 'DELETE', token: b.token });
+  assert.equal((await request(base, `/api/conversations/${id}`, { token: a.token })).status, 200, 'delete by another user is a no-op');
+});
 
-    await request(base, `/api/conversations/${conversationId}`, { method: 'DELETE', headers: otherAuth });
-    const stillThere = await request(base, `/api/conversations/${conversationId}`, { headers: auth });
-    assert.equal(stillThere.status, 200); // the other user's delete was a silent no-op, not a real delete
-  });
+test('AI replies and documents can be reported; only your own content', async () => {
+  resetAi();
+  const a = await registerUser(base);
+  const b = await registerUser(base);
+  queueAi(sampleDoc('Report me'));
+  const gen = await generate(base, a.token, { text: 'make a doc' });
 
-  await t.test('the owner can delete it', async () => {
-    const del = await request(base, `/api/conversations/${conversationId}`, { method: 'DELETE', headers: auth });
-    assert.equal(del.status, 200);
+  const noReason = await request(base, '/api/reports', { method: 'POST', token: a.token, body: { messageId: gen.result.messageId } });
+  assert.equal(noReason.status, 400);
+  const msg = await request(base, '/api/reports', { method: 'POST', token: a.token, body: { messageId: gen.result.messageId, reason: 'Offensive or harmful' } });
+  assert.equal(msg.status, 201);
+  const doc = await request(base, '/api/reports', { method: 'POST', token: a.token, body: { documentId: gen.result.document.id, reason: 'Inaccurate' } });
+  assert.equal(doc.status, 201);
+  const foreign = await request(base, '/api/reports', { method: 'POST', token: b.token, body: { messageId: gen.result.messageId, reason: 'x' } });
+  assert.equal(foreign.status, 404);
 
-    const get = await request(base, `/api/conversations/${conversationId}`, { headers: auth });
-    assert.equal(get.status, 404);
-  });
-
-  await t.test('every conversations endpoint requires auth', async () => {
-    const noAuth = await request(base, '/api/conversations');
-    assert.equal(noAuth.status, 401);
-  });
+  const { rows } = await pool.query('SELECT reason, content_snapshot FROM content_reports WHERE user_id = $1 ORDER BY id', [a.user.id]);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].content_snapshot, /Report me/);
 });

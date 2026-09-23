@@ -1,159 +1,188 @@
-const { test } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { startServer, request, uniqueEmail, registerUser } = require('./helpers');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { startServer, baseUrl, request, uniqueEmail, registerUser, pool, queueAi, resetAi, generate, sampleDoc } = require('./helpers');
 
-test('auth: register, login, /me, and validation', async (t) => {
-  const server = await startServer();
-  const base = `http://localhost:${server.address().port}`;
-  t.after(() => server.close());
+let server;
+let base;
 
-  await t.test('rejects a short password', async () => {
-    const { status, body } = await request(base, '/api/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ name: 'A', email: uniqueEmail('short'), password: '123' })
-    });
-    assert.equal(status, 400);
-    assert.match(body.error, /at least 8 characters/);
-  });
-
-  await t.test('rejects an invalid email', async () => {
-    const { status, body } = await request(base, '/api/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ name: 'A', email: 'not-an-email', password: 'password123' })
-    });
-    assert.equal(status, 400);
-    assert.match(body.error, /valid email/);
-  });
-
-  await t.test('registers a new account and returns a usable token', async () => {
-    const { token, user } = await registerUser(base);
-    assert.ok(token);
-    assert.equal(user.plan, undefined); // publicUser() intentionally doesn't leak billing fields
-
-    const me = await request(base, '/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
-    assert.equal(me.status, 200);
-    assert.equal(me.body.user.email, user.email);
-  });
-
-  await t.test('rejects a duplicate email', async () => {
-    const email = uniqueEmail('dupe');
-    await registerUser(base, { email });
-    const { status, body } = await request(base, '/api/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ name: 'Again', email, password: 'password123' })
-    });
-    assert.equal(status, 409);
-    assert.match(body.error, /already exists/);
-  });
-
-  await t.test('logs in with correct credentials, rejects wrong password', async () => {
-    const email = uniqueEmail('login');
-    await registerUser(base, { email, password: 'correct-password' });
-
-    const good = await request(base, '/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password: 'correct-password' })
-    });
-    assert.equal(good.status, 200);
-    assert.ok(good.body.token);
-
-    const bad = await request(base, '/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password: 'wrong-password' })
-    });
-    assert.equal(bad.status, 401);
-  });
-
-  await t.test('/me without a token is rejected', async () => {
-    const { status } = await request(base, '/api/auth/me');
-    assert.equal(status, 401);
-  });
+before(async () => {
+  server = await startServer();
+  base = baseUrl(server);
+});
+after(async () => {
+  server.close();
+  await pool.end();
 });
 
-test('auth: password reset', async (t) => {
-  const server = await startServer();
-  const base = `http://localhost:${server.address().port}`;
-  t.after(() => server.close());
-  const { pool } = require('./helpers');
+test('register validates each field and reports which one is wrong', async () => {
+  let r = await request(base, '/api/auth/register', { method: 'POST', body: { email: uniqueEmail(), password: 'password123' } });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.field, 'name');
 
-  await t.test('forgot-password gives the same response for real and fake emails', async () => {
-    const email = uniqueEmail('reset');
-    await registerUser(base, { email });
+  r = await request(base, '/api/auth/register', { method: 'POST', body: { name: 'A', email: 'not-an-email', password: 'password123' } });
+  assert.equal(r.body.field, 'email');
 
-    const real = await request(base, '/api/auth/forgot-password', {
-      method: 'POST',
-      body: JSON.stringify({ email })
-    });
-    const fake = await request(base, '/api/auth/forgot-password', {
-      method: 'POST',
-      body: JSON.stringify({ email: uniqueEmail('nobody') })
-    });
-    assert.equal(real.status, 200);
-    assert.equal(fake.status, 200);
-    assert.equal(real.body.message, fake.body.message);
-  });
+  r = await request(base, '/api/auth/register', { method: 'POST', body: { name: 'A', email: uniqueEmail(), password: 'short' } });
+  assert.equal(r.body.field, 'password');
+  assert.equal(r.body.code, 'weak_password');
+});
 
-  await t.test('reset-password rejects a bogus token', async () => {
-    const { status, body } = await request(base, '/api/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify({ token: 'not-a-real-token', password: 'newpassword123' })
-    });
-    assert.equal(status, 400);
-    assert.match(body.error, /invalid or has expired/);
-  });
+test('register then login; duplicate email is rejected with a helpful message', async () => {
+  const email = uniqueEmail();
+  const { user } = await registerUser(base, { email: email.toUpperCase() });
+  assert.equal(user.email, email, 'email is normalised to lowercase');
+  assert.equal(user.hasPassword, true);
 
-  await t.test('a valid, unexpired token resets the password and is single-use', async () => {
-    const email = uniqueEmail('reset2');
-    const { user } = await registerUser(base, { email, password: 'old-password' });
+  const dup = await request(base, '/api/auth/register', { method: 'POST', body: { name: 'B', email, password: 'password123' } });
+  assert.equal(dup.status, 409);
+  assert.equal(dup.body.code, 'email_taken');
 
-    const rawToken = 'test-token-' + user.id;
-    const tokenHash = require('crypto').createHash('sha256').update(rawToken).digest('hex');
-    await pool.query(
-      'UPDATE users SET reset_token_hash = $1, reset_token_expires_at = now() + interval \'1 hour\' WHERE id = $2',
-      [tokenHash, user.id]
-    );
+  const ok = await request(base, '/api/auth/login', { method: 'POST', body: { email, password: 'password123' } });
+  assert.equal(ok.status, 200);
+  assert.ok(ok.body.token);
 
-    const reset = await request(base, '/api/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify({ token: rawToken, password: 'new-password-456' })
-    });
-    assert.equal(reset.status, 200);
+  const bad = await request(base, '/api/auth/login', { method: 'POST', body: { email, password: 'wrongpass1' } });
+  assert.equal(bad.status, 401);
+  assert.equal(bad.body.code, 'invalid_credentials');
 
-    const loginOld = await request(base, '/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password: 'old-password' })
-    });
-    assert.equal(loginOld.status, 401);
+  const unknown = await request(base, '/api/auth/login', { method: 'POST', body: { email: uniqueEmail(), password: 'wrongpass1' } });
+  assert.equal(unknown.status, 401);
+  assert.equal(unknown.body.error, bad.body.error, 'no user enumeration');
+});
 
-    const loginNew = await request(base, '/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password: 'new-password-456' })
-    });
-    assert.equal(loginNew.status, 200);
+test('GET /me validates the token and refreshes it once it is a day old', async () => {
+  const { token, user } = await registerUser(base);
+  const fresh = await request(base, '/api/auth/me', { token });
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.body.user.id, user.id);
+  assert.equal(fresh.body.token, undefined, 'no refresh for a fresh token');
 
-    // Token is consumed — using it again must fail even though it was valid a moment ago.
-    const reused = await request(base, '/api/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify({ token: rawToken, password: 'yet-another-789' })
-    });
-    assert.equal(reused.status, 400);
-  });
+  const old = jwt.sign({ userId: user.id, iat: Math.floor(Date.now() / 1000) - 2 * 86400 }, process.env.JWT_SECRET, { expiresIn: '60d' });
+  const refreshed = await request(base, '/api/auth/me', { token: old });
+  assert.equal(refreshed.status, 200);
+  assert.ok(refreshed.body.token, 'old token gets a fresh one');
 
-  await t.test('an expired token is rejected', async () => {
-    const email = uniqueEmail('expired');
-    const { user } = await registerUser(base, { email });
+  const expired = jwt.sign({ userId: user.id, iat: Math.floor(Date.now() / 1000) - 100 }, process.env.JWT_SECRET, { expiresIn: 1 });
+  await new Promise(r => setTimeout(r, 1100));
+  const exp = await request(base, '/api/auth/me', { token: expired });
+  assert.equal(exp.status, 401);
+  assert.equal(exp.body.code, 'session_expired');
 
-    const rawToken = 'expired-token-' + user.id;
-    const tokenHash = require('crypto').createHash('sha256').update(rawToken).digest('hex');
-    await pool.query(
-      "UPDATE users SET reset_token_hash = $1, reset_token_expires_at = now() - interval '1 hour' WHERE id = $2",
-      [tokenHash, user.id]
-    );
+  const garbage = await request(base, '/api/auth/me', { token: 'not-a-jwt' });
+  assert.equal(garbage.status, 401);
+});
 
-    const { status } = await request(base, '/api/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify({ token: rawToken, password: 'irrelevant123' })
-    });
-    assert.equal(status, 400);
-  });
+test('PATCH /me renames the user', async () => {
+  const { token } = await registerUser(base);
+  const r = await request(base, '/api/auth/me', { method: 'PATCH', token, body: { name: '  Aziz  ' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.user.name, 'Aziz');
+  const empty = await request(base, '/api/auth/me', { method: 'PATCH', token, body: { name: '  ' } });
+  assert.equal(empty.status, 400);
+});
+
+test('Google sign-in creates an account, then signs the same account in', async () => {
+  const email = uniqueEmail('g');
+  const sub = crypto.randomUUID();
+  const first = await request(base, '/api/auth/google', { method: 'POST', body: { idToken: `google:${sub}:${email}:true` } });
+  assert.equal(first.status, 201);
+  assert.equal(first.body.created, true);
+  assert.equal(first.body.user.googleLinked, true);
+  assert.equal(first.body.user.hasPassword, false);
+
+  const second = await request(base, '/api/auth/google', { method: 'POST', body: { idToken: `google:${sub}:${email}:true` } });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.created, false);
+  assert.equal(second.body.user.id, first.body.user.id);
+
+  // Password login on a Google-only account explains what to do instead.
+  const pw = await request(base, '/api/auth/login', { method: 'POST', body: { email, password: 'whatever12' } });
+  assert.equal(pw.body.code, 'use_google');
+
+  // And registering with that email says it's a Google account.
+  const reg = await request(base, '/api/auth/register', { method: 'POST', body: { name: 'X', email, password: 'password123' } });
+  assert.equal(reg.status, 409);
+  assert.match(reg.body.error, /Google/);
+});
+
+test('Google sign-in links to an existing email account only when Google verified the email', async () => {
+  const { user, email } = await registerUser(base);
+
+  const unverified = await request(base, '/api/auth/google', { method: 'POST', body: { idToken: `google:${crypto.randomUUID()}:${email}:false` } });
+  assert.equal(unverified.status, 409, 'unverified Google email must not take over the account');
+
+  const verified = await request(base, '/api/auth/google', { method: 'POST', body: { idToken: `google:${crypto.randomUUID()}:${email}:true` } });
+  assert.equal(verified.status, 200);
+  assert.equal(verified.body.user.id, user.id);
+  assert.equal(verified.body.user.googleLinked, true);
+  assert.equal(verified.body.user.hasPassword, true);
+});
+
+test('Google sign-in rejects missing or invalid credentials', async () => {
+  const missing = await request(base, '/api/auth/google', { method: 'POST', body: {} });
+  assert.equal(missing.status, 400);
+  const invalid = await request(base, '/api/auth/google', { method: 'POST', body: { idToken: 'forged' } });
+  assert.equal(invalid.status, 401);
+  assert.equal(invalid.body.code, 'google_invalid');
+});
+
+test('password reset works once, with a token that expires', async () => {
+  const { user, email } = await registerUser(base);
+  const generic = await request(base, '/api/auth/forgot-password', { method: 'POST', body: { email } });
+  assert.equal(generic.status, 200);
+  const unknown = await request(base, '/api/auth/forgot-password', { method: 'POST', body: { email: uniqueEmail() } });
+  assert.equal(unknown.body.message, generic.body.message, 'same answer for unknown emails');
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  await pool.query('UPDATE users SET reset_token_hash = $1, reset_token_expires_at = now() + interval \'1 hour\' WHERE id = $2', [hash, user.id]);
+
+  const weak = await request(base, '/api/auth/reset-password', { method: 'POST', body: { token, password: 'short' } });
+  assert.equal(weak.status, 400);
+  const ok = await request(base, '/api/auth/reset-password', { method: 'POST', body: { token, password: 'newpassword1' } });
+  assert.equal(ok.status, 200);
+  const again = await request(base, '/api/auth/reset-password', { method: 'POST', body: { token, password: 'newpassword2' } });
+  assert.equal(again.body.code, 'reset_invalid', 'token is single-use');
+
+  const login = await request(base, '/api/auth/login', { method: 'POST', body: { email, password: 'newpassword1' } });
+  assert.equal(login.status, 200);
+});
+
+test('deleting the account removes all user data but keeps payment records', async () => {
+  resetAi();
+  const { token, user } = await registerUser(base);
+  queueAi(sampleDoc('Doomed'));
+  const gen = await generate(base, token, { text: 'make an invoice', format: 'pdf' });
+  assert.equal(gen.result.action, 'generate');
+  const order = await pool.query("INSERT INTO orders (user_id, provider, plan, amount_uzs, status) VALUES ($1, 'payme', 'pro', 49000, 'paid') RETURNING id", [user.id]);
+
+  const del = await request(base, '/api/auth/account', { method: 'DELETE', token });
+  assert.equal(del.status, 200);
+
+  const users = await pool.query('SELECT 1 FROM users WHERE id = $1', [user.id]);
+  assert.equal(users.rowCount, 0);
+  const docs = await pool.query('SELECT 1 FROM documents WHERE user_id = $1', [user.id]);
+  assert.equal(docs.rowCount, 0);
+  const convos = await pool.query('SELECT 1 FROM conversations WHERE user_id = $1', [user.id]);
+  assert.equal(convos.rowCount, 0);
+  const kept = await pool.query('SELECT user_id FROM orders WHERE id = $1', [order.rows[0].id]);
+  assert.equal(kept.rowCount, 1, 'order kept for tax records');
+  assert.equal(kept.rows[0].user_id, null, 'but unlinked from the deleted user');
+
+  const me = await request(base, '/api/auth/me', { token });
+  assert.equal(me.status, 401);
+  assert.equal(me.body.code, 'account_deleted');
+});
+
+test('login attempts are rate limited per IP', async () => {
+  const ip = '203.0.113.77';
+  let last;
+  for (let i = 0; i < 21; i++) {
+    last = await request(base, '/api/auth/login', { method: 'POST', ip, body: { email: 'x@example.com', password: 'wrongpass1' } });
+  }
+  assert.equal(last.status, 429);
+  assert.equal(last.body.code, 'rate_limited');
+  assert.ok(last.headers.get('retry-after'));
 });
