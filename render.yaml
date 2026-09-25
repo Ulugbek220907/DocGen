@@ -14,13 +14,20 @@ services:
         fromDatabase:
           name: docgen-db
           property: connectionString
-      # Required for AI generation — get one at https://openrouter.ai/keys.
-      # sync: false means Render prompts for this during Blueprint setup
-      # instead of deploying with it blank.
-      - key: OPENROUTER_API_KEY
+      # Required for AI generation — a DeepSeek key from
+      # https://platform.deepseek.com/api_keys. sync: false means Render
+      # prompts for it during Blueprint setup instead of deploying blank.
+      - key: AI_API_KEY
         sync: false
-      - key: ALLOWED_MODELS
-        value: google/gemini-3.7-flash
+      - key: AI_BASE_URL
+        value: https://api.deepseek.com
+      - key: AI_MODEL
+        value: deepseek-flash
+      # Google OAuth Web client ID (see README > Google sign-in).
+      - key: GOOGLE_CLIENT_IDS
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
       # Payment provider variables — all optional. Leave blank in the
       # Blueprint setup screen and fill in later (Environment tab) once
       # you've registered with each provider; see README > Plans & billing.
@@ -32,9 +39,13 @@ services:
         sync: false
       - key: PADDLE_ENVIRONMENT
         sync: false
+      - key: PADDLE_API_KEY
+        sync: false
       - key: PAYME_MERCHANT_ID
         sync: false
       - key: PAYME_KEY
+        sync: false
+      - key: PAYME_CHECKOUT_URL
         sync: false
       - key: CLICK_SERVICE_ID
         sync: false

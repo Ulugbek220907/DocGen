@@ -1,71 +1,17 @@
 const pool = require('./db-pool');
 const { getPlan } = require('./plans');
 
-const MS_PER_MONTH = 30 * 24 * 60 * 60 * 1000;
-
-// Atomically checks whether userId may generate one more document right now
-// and, if so, consumes it. Uses SELECT ... FOR UPDATE so two concurrent
-// requests from the same user can't both slip through on the last unit of
-// quota. Returns { allowed, remaining, plan, limit }.
-async function checkAndConsumeQuota(userId) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const { rows } = await client.query(
-      'SELECT plan, plan_expires_at, monthly_usage_count, usage_reset_at FROM users WHERE id = $1 FOR UPDATE',
-      [userId]
-    );
-    const user = rows[0];
-    if (!user) {
-      await client.query('ROLLBACK');
-      return { allowed: false, remaining: 0, plan: 'free', limit: 0 };
-    }
-
-    // A paid plan that expired without a renewal webhook updating it yet
-    // (e.g. the provider's renewal charge failed) reverts to free rules.
-    let effectivePlan = user.plan;
-    if (effectivePlan !== 'free' && user.plan_expires_at && new Date(user.plan_expires_at) < new Date()) {
-      effectivePlan = 'free';
-    }
-
-    let usageCount = user.monthly_usage_count;
-    let resetAt = new Date(user.usage_reset_at);
-    const now = new Date();
-    if (now - resetAt > MS_PER_MONTH) {
-      usageCount = 0;
-      resetAt = now;
-    }
-
-    const limit = getPlan(effectivePlan).monthlyDocs;
-    const allowed = usageCount < limit;
-
-    if (allowed) {
-      usageCount += 1;
-    }
-
-    await client.query(
-      'UPDATE users SET monthly_usage_count = $1, usage_reset_at = $2 WHERE id = $3',
-      [usageCount, resetAt, userId]
-    );
-
-    await client.query('COMMIT');
-
-    return {
-      allowed,
-      remaining: limit === Infinity ? Infinity : Math.max(0, limit - usageCount),
-      plan: effectivePlan,
-      limit
-    };
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+// A paid plan that expired without a renewal webhook (e.g. a failed renewal
+// charge) is treated as free until a webhook says otherwise.
+function effectivePlan(user) {
+  if (user.plan !== 'free' && user.plan_expires_at && new Date(user.plan_expires_at) < new Date()) {
+    return 'free';
   }
+  return user.plan || 'free';
 }
 
-// Read-only status for the Settings UI — does not consume quota or mutate state.
+const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 async function getUsageStatus(userId) {
   const { rows } = await pool.query(
     'SELECT plan, plan_expires_at, monthly_usage_count, usage_reset_at FROM users WHERE id = $1',
@@ -74,22 +20,33 @@ async function getUsageStatus(userId) {
   const user = rows[0];
   if (!user) return null;
 
-  let effectivePlan = user.plan;
-  if (effectivePlan !== 'free' && user.plan_expires_at && new Date(user.plan_expires_at) < new Date()) {
-    effectivePlan = 'free';
-  }
-
+  const plan = effectivePlan(user);
   const resetAt = new Date(user.usage_reset_at);
-  const usageCount = (new Date() - resetAt > MS_PER_MONTH) ? 0 : user.monthly_usage_count;
-  const limit = getPlan(effectivePlan).monthlyDocs;
+  const windowExpired = Date.now() - resetAt.getTime() > WINDOW_MS;
+  const usageCount = windowExpired ? 0 : user.monthly_usage_count;
+  const limit = getPlan(plan).monthlyDocs;
 
   return {
-    plan: effectivePlan,
+    plan,
     planExpiresAt: user.plan_expires_at,
     usageCount,
     limit,
-    remaining: limit === Infinity ? Infinity : Math.max(0, limit - usageCount)
+    remaining: limit === Infinity ? Infinity : Math.max(0, limit - usageCount),
+    resetsAt: windowExpired ? null : new Date(resetAt.getTime() + WINDOW_MS)
   };
 }
 
-module.exports = { checkAndConsumeQuota, getUsageStatus };
+// Counts one AI generation. Called only after a document was actually
+// produced, so failed calls and plain chat replies never cost the user.
+// The rolling-window reset happens in the same statement, so it's atomic.
+async function recordGeneration(userId) {
+  await pool.query(
+    `UPDATE users
+        SET monthly_usage_count = CASE WHEN usage_reset_at < now() - interval '30 days' THEN 1 ELSE monthly_usage_count + 1 END,
+            usage_reset_at      = CASE WHEN usage_reset_at < now() - interval '30 days' THEN now() ELSE usage_reset_at END
+      WHERE id = $1`,
+    [userId]
+  );
+}
+
+module.exports = { getUsageStatus, recordGeneration, effectivePlan };

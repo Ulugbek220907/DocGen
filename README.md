@@ -1,181 +1,106 @@
 # DocGen AI
 
-Generate PDF, DOCX, and XLSX documents from plain-language descriptions, powered by a pooled AI key on the backend (defaults to Gemini 3.7 Flash via [OpenRouter](https://openrouter.ai)). Chat with the AI to draft the document, edit the result inline in the same conversation, and download the finished file.
+Create PDF, Word and Excel documents by chatting. Describe what you need in any language — the AI writes it, you polish it in a real editor, and the app builds the file on your device.
 
-Real accounts, hashed passwords, a real Postgres database, and real subscription billing (worldwide via Paddle, Uzbekistan via Payme/Click) — this is no longer a client-only prototype.
+Web app + Android app, one Node/Express + Postgres backend, AI by [DeepSeek](https://platform.deepseek.com) (any OpenAI-compatible API works).
 
 ## Features
 
-- **Real accounts** — registration and login are handled by a Node/Express backend with bcrypt-hashed passwords and signed session tokens, backed by Postgres
-- **Free & Pro plans** — free accounts get a monthly document quota on a pooled AI key (no API key to paste in anymore); Pro is unlimited. See [Plans & billing](#plans--billing)
-- **Chat-driven document generation** — describe what you need, the assistant asks clarifying questions when it needs more detail, and generates a real PDF/DOCX/XLSX when it has enough to work with
-- **Inline document editor** — double-click any text or table cell directly in the chat to edit the generated document's actual content; changes regenerate the real file automatically
-- **Rich formatting** — `**bold**`, `*italic*`, `` `code` ``, `^superscript`, `_subscript`, and real math notation, rendered properly across chat, PDF, and DOCX
-- **Live Excel formulas** — table cells starting with `=` become real formulas (`=SUM(B2:B5)`) in generated spreadsheets, not frozen numbers
-- **File attachments** — attach images (to vision-capable models) or text files and ask questions about them
-- **Streaming responses** with live status updates
-- **Session history synced to your account** — conversations and the document schema behind every generated file are stored in Postgres, tied to `user_id`, so they survive a cache clear and follow you across devices
-- **Password reset via email** — "Forgot password?" on the login screen
+- **One-tap sign-in with Google** (web and native Android), with email + password as a fallback and a full password-reset flow
+- **Chat to create** — templates for invoices, CVs, budgets, letters, reports and minutes; live progress while the document is written; stop button; follow-up suggestions
+- **Document studio** — a WYSIWYG "paper" editor: tap any text to edit, Enter/Backspace split and merge paragraphs and bullets, section menu (add paragraph/list/table, move, delete), table tools (add/remove rows and columns), undo/redo, autosave
+- **AI edits** — "Ask AI to change something…" rewrites the open document in place (undoable)
+- **Real files** — PDF, DOCX and XLSX built on-device; tables keep live formulas in Excel and show computed values in PDF/Word; switch format any time
+- **Library** — every document is saved to your account, searchable by title and content; rename, duplicate, delete
+- **Attachments** — images (auto-downscaled) and text files (CSV, TXT, MD, JSON…)
+- **Plans** — Free (10 documents / 30 days) and Pro (unlimited), paid on the web via Paddle (worldwide) or Payme / Click (Uzbekistan)
+- **Account deletion** in-app and via a public page, as Google Play requires
+- **Themes** — system, light, dark, midnight
 
 ## Project structure
 
-Deliberately flat — no nested `routes/`/`middleware/`/`db/` folders for the server code, since those are easy to lose or misplace when assembling a repo by hand (this bit a real deploy: a `MODULE_NOT_FOUND` error on Render turned out to be a missing subfolder that never made it into the repo). The only subfolder is `public/`, which is required — everything in it is served as-is over HTTP, so keeping server code and `.env` out of it is a real security boundary, not just organization.
-
 ```
-docgen-app/
-├── server.js          # Express server — serves the API and the frontend
-├── auth-routes.js      # /api/auth/register, /login, /me
-├── require-auth.js     # JWT verification middleware
-├── db-pool.js          # Postgres connection pool
-├── plans.js             # Free/Pro plan definitions (limits, prices)
-├── usage.js              # Monthly quota check-and-consume
-├── ai-routes.js           # POST /api/generate/stream — pooled-key AI proxy, quota-gated
-├── billing-routes.js       # GET /api/billing/status, POST /api/billing/checkout/*
-├── paddle-webhook.js        # POST /webhooks/paddle — worldwide subscription events
-├── payme-webhook.js          # POST /webhooks/payme — Uzbekistan (Payme Merchant API)
-├── click-webhook.js           # POST /webhooks/click/{prepare,complete} — Uzbekistan (Click)
-├── schema.sql                  # Run this once against your database
-├── package.json
-├── render.yaml                  # One-click Render deployment blueprint
-├── capacitor.config.json         # Android app wrapper config
-├── .env.example
-└── public/                        # The frontend — served as static files
-    ├── index.html
-    ├── style.css
-    ├── app.js
-    └── pdfmake.min.js, vfs_fonts.js, docx.umd.js, exceljs.min.js
+server.js              Express app: security headers, routes, static files, schema auto-migration
+config.js              Every environment variable, in one place
+schema.sql             Idempotent schema — applied automatically on every boot
+db-pool.js             Postgres pool
+require-auth.js        JWT middleware
+rate-limit.js          In-memory rate limiter
+auth-routes.js         /api/auth: google, register, login, me, account deletion, password reset
+google-verify.js       Google ID-token verification
+generate-routes.js     /api/generate: AI chat + document generation over server-sent events
+ai.js                  Streaming OpenAI-compatible client (DeepSeek by default)
+prompt.js              System prompt + model-output parsing
+documents-routes.js    /api/documents: library CRUD, search, duplicate
+conversations-routes.js /api/conversations: chat history
+plans.js / usage.js    Plan limits and metering
+billing-routes.js      /api/billing: status, checkout links
+paddle-webhook.js      /webhooks/paddle
+payme-webhook.js       /webhooks/payme  (Payme Merchant API)
+click-webhook.js       /webhooks/click/{prepare,complete}
+mailer.js              SMTP for password-reset emails
+public/                The app (served as-is, and bundled into the Android APK)
+  index.html, style.css, privacy.html, delete-account.html
+  js/                  ES modules: main, auth, chat, studio, drawer, settings, api, native, ui,
+                       builders (PDF/DOCX/XLSX), formula, doc-schema (shared with the server)
+  vendor/              pdfmake, docx, exceljs, capacitor (loaded on demand)
+android/               Capacitor 8 Android project (com.docgen.app)
+tests/                 node:test suite
 ```
 
 ## Local setup
 
-**1. Install dependencies**
-
 ```bash
 npm install
+cp .env.example .env      # then fill it in (see below)
+npm start                 # http://localhost:3000
 ```
 
-**2. Set up Postgres.** Any Postgres instance works — a local install, a free Render Postgres, Supabase, or similar. You need a `DATABASE_URL` connection string either way.
-
-Local Postgres example:
-```bash
-createdb docgen
-psql docgen -f schema.sql
-```
-
-**3. Configure environment variables**
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-- `DATABASE_URL` — your Postgres connection string
-- `JWT_SECRET` — any long random string (generate one with `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`)
-- `OPENROUTER_API_KEY` — one pooled key for every user, from [openrouter.ai/keys](https://openrouter.ai/keys) (see [Plans & billing](#plans--billing) — users no longer bring their own key)
-- Payment provider variables, only needed once you're ready to accept real payments — see [Plans & billing](#plans--billing) below. The app runs fine without them; upgrade buttons just won't do anything yet.
-
-**4. Run it**
-
-```bash
-npm start
-```
-
-Open `http://localhost:3000` and register an account (this creates a real row in your database, not `localStorage`). Free accounts get a monthly document quota on the pooled key set above; no per-user API key to configure anymore.
+Minimum `.env`: `DATABASE_URL` (any Postgres), `JWT_SECRET` (long random string), `AI_API_KEY` (DeepSeek key). The schema is created automatically on startup. Without `GOOGLE_CLIENT_IDS` the sign-in screen shows the email form only; without payment keys the upgrade sheet says payments are coming soon.
 
 ## Testing
 
 ```bash
-npm test
-```
-
-Runs the real test suite (`tests/*.test.js`, Node's built-in test runner) against a real Postgres database — no mocks, same philosophy as the manual verification this project was built with. You need a throwaway database with the schema applied:
-
-```bash
 createdb docgen_test
-psql docgen_test -f schema.sql
-DATABASE_URL=postgresql://postgres@localhost:5432/docgen_test JWT_SECRET=any-string-for-tests npm test
+DATABASE_URL=postgresql://postgres@localhost:5432/docgen_test JWT_SECRET=test npm test
 ```
 
-Each test file starts its own instance of the server on an ephemeral port (`server.js` only binds a real port when run directly — `require('./server')` just gets you the Express app), so files run safely in parallel and never collide. Covers registration/login validation, the full password-reset lifecycle (including single-use and expiry), free/pro quota gating and the monthly rolling reset, request-id deduplication on the AI proxy, and conversation ownership isolation. Does **not** cover the Paddle/Payme/Click webhook protocol handlers end-to-end (those were verified manually during development — see the commit history) or anything requiring a real OpenRouter key.
+46 tests against a real Postgres database, with the AI model and Google token verification stubbed (fast, free, deterministic). Covers: registration/login validation and errors, rate limiting, session refresh, Google sign-in (create, re-login, safe linking of verified emails), password reset, account deletion (data removed, payment records kept unlinked), generation (replies free, documents counted, retries on bad model output, AI failures, quota and Pro/expired-Pro gating, history, attachments, format detection), the documents library (search, normalisation, duplicate, legacy import, ownership), conversations, the full Payme JSON-RPC flow incl. refunds, Click prepare/complete signatures, Paddle signature verification and webhooks, AI-content reports, language detection, and the formula engine.
+
+## Google sign-in
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → create a project → **OAuth consent screen** (External; app name, support email, privacy policy URL `https://<your-domain>/privacy.html`; scopes: email, profile, openid).
+2. **Credentials → Create OAuth client ID → Web application.** Authorized JavaScript origins: your web domain (e.g. `https://docgen-app-qpuo.onrender.com`) and `http://localhost:3000`. Put this client ID in `GOOGLE_CLIENT_IDS`.
+3. **Create OAuth client ID → Android**, package `com.docgen.app`, SHA-1 of the upload key. After the first upload to Play Console, create a second Android client with the **App signing key** SHA-1 (Play Console → Test and release → App integrity).
+
+The Android app uses the Web client ID too (Credential Manager needs it); the Android clients only authorise the signing keys.
 
 ## Plans & billing
 
-- **Free** — a monthly document quota (`plans.js`) on the server's pooled OpenRouter key.
-- **Pro** — unlimited, billed monthly. Two payment rails, both optional until configured:
-  - **Worldwide** — [Paddle](https://paddle.com) as Merchant of Record (handles cards, VAT/tax, and payout — this sidesteps Stripe's country-restricted merchant onboarding, since Uzbekistan isn't a supported Stripe country). Set `PADDLE_CLIENT_TOKEN`, `PADDLE_PRICE_ID`, `PADDLE_WEBHOOK_SECRET` and point a Paddle webhook destination at `/webhooks/paddle`.
-  - **Uzbekistan** — [Payme](https://business.payme.uz) and [Click](https://merchant.click.uz), the two dominant local processors (needed because UzCard/Humo, most local cards, don't route through Paddle). Set `PAYME_MERCHANT_ID`/`PAYME_KEY` and `CLICK_SERVICE_ID`/`CLICK_MERCHANT_ID`/`CLICK_SECRET_KEY`; their dashboards need callback URLs `/webhooks/payme` and `/webhooks/click/{prepare,complete}` respectively.
+- **Free** — 10 documents per rolling 30 days (`plans.js`). Chat replies and manual edits are free; AI generations and AI edits count.
+- **Pro** — unlimited. $9/month via **Paddle** (Merchant of Record: cards, PayPal, Apple/Google Pay, handles VAT; works for Uzbek sellers, unlike Stripe), or 49,000 so'm per 30 days via **Payme** or **Click** (UzCard/Humo).
 
-All three require you to independently register a merchant account with that provider (identity/business verification) — see `.env.example` for exact variable names and where to find each one. Until real credentials are set, the "Upgrade" flow shows a friendly "not configured yet" message instead of erroring.
+Payments are order-based: the app creates an order, the provider's signed callback confirms it, and only then is Pro granted (`plans.grantProDays`). Callback URLs: `/webhooks/paddle`, `/webhooks/payme` (account field `order_id`), `/webhooks/click/prepare` and `/webhooks/click/complete`.
 
-A user's plan is never set directly by the app — only a verified webhook from one of these three providers changes `users.plan`, so the source of truth always matches what was actually paid for.
+**Google Play rule:** apps distributed on Play must use Google Play Billing for digital subscriptions. The Android app therefore never shows prices, upgrade buttons or payment links — it only shows the current plan (Pro bought on the website works in the app). Adding Play Billing is the next step if you want to sell inside the app.
 
-## Deploying to Render
+## Deploying (Render)
 
-**Important — read this before pushing to GitHub:** make sure `public/` actually exists as a folder in your repo with all 7 files inside it. If you're adding files one at a time through GitHub's web UI, type the full path (e.g. `public/index.html`) into the "Name your file" box when creating each one — GitHub creates the folder automatically from that. If you drag-and-drop files instead, make sure you drag the whole `public` folder, not just its contents. A missing file here won't crash the server, but a missing `public/` folder will mean nothing loads when you visit the site.
-
-1. Push this repo to GitHub — double-check on GitHub.com afterward that you see `server.js` and all the other root-level `.js` files listed in [Project structure](#project-structure) above, plus a `public/` folder containing all 7 frontend files
-2. In the Render dashboard: **New → Blueprint**, connect the repo
-3. Render provisions the web service and database, and auto-generates `JWT_SECRET` and `DATABASE_URL` for you
-4. Once deployed, connect to the new database and run `schema.sql` against it once (Render's dashboard gives you a `psql` connection command under the database's "Connect" tab) — safe to re-run after future updates too, every statement in it is idempotent
-5. Add `OPENROUTER_API_KEY` (required) and whichever payment provider variables from [Plans & billing](#plans--billing) you're ready to use (optional) in the service's Environment tab
-
-**Free-tier caveats worth knowing before you rely on this:**
-- Free web services spin down after 15 minutes of no traffic — the next request pays a ~1 minute cold start
-- Free Postgres instances on Render expire after 30 days and are not automatically renewed — fine for testing, not for anything you don't want to lose
-- Neither of these apply once you're on a paid plan
-
-## Known limitations
-
-- **Attachment content still isn't recoverable after reload.** Text/image file contents sent to the model aren't persisted (only filenames, for display) — same tradeoff as before, just now documented rather than accidental. Re-attach or use the "reuse" chip within the same page load.
-- **Password reset emails need real SMTP credentials to actually send.** Without `SMTP_*` env vars set, the reset link is only printed to the server log — functional for local dev, not for real users. See `.env.example`.
-- **Payment providers are scaffolded, not activated.** Paddle/Payme/Click integration code is complete and tested against synthetic requests, but real payments only start flowing once you've registered merchant accounts with each provider and set their env vars — see [Plans & billing](#plans--billing).
-- **Plan/pricing numbers are placeholders.** `plans.js` ships with example limits and prices (5 free docs/month, $9 or 49,000 UZS for Pro) — tune them for your actual business before launch.
-- **No self-serve "manage/cancel subscription" UI.** Paddle has a hosted customer portal you can link to once you have a real account; Payme/Click don't have a recurring-subscription concept, so a Pro period bought through them simply expires unless renewed.
-
-## Roadmap ideas
-
-- Persist attachment content too (not just filenames), so re-opening a conversation doesn't lose what was attached
-- Branded templates (logo, color scheme, font persisted per user, applied to every generated document)
-- Shareable read-only links for generated documents
-- Self-serve subscription management (Paddle customer portal link, Payme/Click renewal reminders)
-- iOS build alongside the Android one (see [Android app](#android-app))
+`render.yaml` is a Blueprint: **New → Blueprint** on Render, then set the prompted variables (`AI_API_KEY`, `GOOGLE_CLIENT_IDS`, `PUBLIC_URL`, payment keys). The schema migrates itself on boot. Free-tier notes: the web service sleeps after 15 idle minutes (the app shows "Waking up the server…" and waits), and **free Postgres databases expire 30 days after creation** — upgrade the database before relying on it.
 
 ## Android app
 
-`android/` is a [Capacitor](https://capacitorjs.com) wrapper — a thin native
-shell that loads the deployed web app at the URL in `capacitor.config.json`
-(`server.url`). It's not an offline bundle: this app needs the real
-Node/Postgres backend running somewhere reachable, same as the website.
-
-`capacitor.config.json`'s `server.url` currently points at the live deployment
-(`https://docgen-app-qpuo.onrender.com`). If you ever redeploy to a new URL
-(a different Render service, your own domain, etc.), update that one line
-and rebuild:
+The web app in `public/` is bundled into the APK (fast start, works on bad networks); API calls go to `PRODUCTION_API` in `public/js/config.js`. Native features: Google sign-in (Credential Manager), save/share files through the Android share sheet, open files in an installed viewer, hardware back button, edge-to-edge safe areas, splash screen.
 
 ```bash
 npx cap sync android
 cd android && ./gradlew assembleRelease bundleRelease
 ```
 
-Outputs land in `android/app/build/outputs/apk/release/app-release.apk`
-(sideload/testing) and `android/app/build/outputs/bundle/release/app-release.aab`
-(**this is the file Play Console wants** — Google has required `.aab`, not
-`.apk`, for new Play Store listings since 2021).
+- `android/app/build/outputs/bundle/release/app-release.aab` — upload this to Play Console
+- `android/app/build/outputs/apk/release/app-release.apk` — for installing directly on a phone
 
-**Signing:** both are already signed with a real release keystore
-(`docgen-upload` alias) delivered alongside this build — see the keystore
-handoff for exactly where. Gradle picks it up automatically via
-`android/keystore.properties` (gitignored — never commit it or the
-`.keystore` file itself). **Back up both immediately and somewhere safe.**
-Losing them means you can never ship an update to this app once it's live
-on the Play Store under `com.docgen.app` — Google would treat any rebuild
-with a different key as a different app.
-
-**Play Console basics:** create an app, choose "production" (or "internal
-testing" first, recommended), upload the `.aab`, fill in the store listing
-(the icon/splash already baked in came from `assets/` at the repo root —
-regenerate with `npx capacitor-assets generate --android` if you swap the
-source art), and submit for review.
+Signing uses `android/keystore.properties` + the upload keystore (both gitignored). **Back them up** — without the upload key you can't publish updates (Play App Signing lets Google reset an upload key, but it takes days). Bump `versionCode` in `android/app/build.gradle` for every upload. Play submission details: [`play-store-assets/play-console-guide.md`](play-store-assets/play-console-guide.md).
 
 ## License
 

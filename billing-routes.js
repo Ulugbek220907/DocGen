@@ -1,67 +1,91 @@
 const express = require('express');
+const pool = require('./db-pool');
+const config = require('./config');
 const requireAuth = require('./require-auth');
 const { getUsageStatus } = require('./usage');
 const { getPlan } = require('./plans');
 
 const router = express.Router();
+router.use(requireAuth);
 
-router.get('/status', requireAuth, async (req, res) => {
-  try {
-    const status = await getUsageStatus(req.userId);
-    if (!status) return res.status(404).json({ error: 'User not found.' });
-    res.json({
-      ...status,
-      limit: status.limit === Infinity ? null : status.limit,
-      remaining: status.remaining === Infinity ? null : status.remaining
-    });
-  } catch (err) {
-    console.error('Billing status error:', err);
-    res.status(500).json({ error: 'Could not load billing status.' });
-  }
-});
+function paymentsAvailability() {
+  return {
+    paddle: !!(config.paddle.clientToken && config.paddle.priceId),
+    payme: !!(config.payme.merchantId && config.payme.key),
+    click: !!(config.click.serviceId && config.click.merchantId && config.click.secretKey)
+  };
+}
 
-// Worldwide: Paddle is the Merchant of Record, so all we hand the client is
-// the (non-secret) price id + client-side token it needs to open Paddle.js's
-// own checkout overlay — no server-side charge happens here, the webhook
-// (paddle-webhook.js) is what actually grants the plan once Paddle confirms
-// payment.
-router.post('/checkout/paddle', requireAuth, (req, res) => {
-  const priceId = process.env.PADDLE_PRICE_ID || null;
-  const clientToken = process.env.PADDLE_CLIENT_TOKEN || null;
-  const environment = process.env.PADDLE_ENVIRONMENT || null; // 'sandbox' while testing
-  res.json({ priceId, clientToken, environment });
-});
-
-// Uzbekistan: Payme and Click don't have a client-side SDK like Paddle's —
-// the browser is simply redirected to a checkout URL built from documented
-// query params. The account/transaction param carries our user id so the
-// matching webhook (payme-webhook.js / click-webhook.js) can credit the
-// right account once the provider confirms payment.
-router.post('/checkout/payme', requireAuth, (req, res) => {
-  const merchantId = process.env.PAYME_MERCHANT_ID;
-  if (!merchantId) return res.json({ url: null });
-
-  const amountTiyin = Math.round(getPlan('pro').priceUzs * 100);
-  const params = `m=${merchantId};ac.user_id=${req.userId};a=${amountTiyin}`;
-  const encoded = Buffer.from(params, 'utf8').toString('base64');
-  res.json({ url: `https://checkout.paycom.uz/${encoded}` });
-});
-
-router.post('/checkout/click', requireAuth, (req, res) => {
-  const serviceId = process.env.CLICK_SERVICE_ID;
-  const merchantId = process.env.CLICK_MERCHANT_ID;
-  if (!serviceId || !merchantId) return res.json({ url: null });
-
-  const amount = getPlan('pro').priceUzs;
-  const returnUrl = `${req.protocol}://${req.get('host')}/`;
-  const params = new URLSearchParams({
-    service_id: serviceId,
-    merchant_id: merchantId,
-    amount: amount.toFixed(2),
-    transaction_param: String(req.userId),
-    return_url: returnUrl
+router.get('/status', async (req, res) => {
+  const status = await getUsageStatus(req.userId);
+  if (!status) return res.status(401).json({ error: 'This account no longer exists.', code: 'account_deleted' });
+  const pro = getPlan('pro');
+  res.json({
+    plan: status.plan,
+    planExpiresAt: status.planExpiresAt,
+    usageCount: status.usageCount,
+    limit: status.limit === Infinity ? null : status.limit,
+    remaining: status.remaining === Infinity ? null : status.remaining,
+    resetsAt: status.resetsAt,
+    pricing: { usd: pro.priceUsd, uzs: pro.priceUzs, periodDays: pro.periodDays },
+    payments: paymentsAvailability()
   });
-  res.json({ url: `https://my.click.uz/services/pay?${params.toString()}` });
+});
+
+function unavailable(res) {
+  return res.status(503).json({ error: 'This payment method isn’t available yet. Please try another one.', code: 'payments_unavailable' });
+}
+
+// Worldwide: Paddle is the Merchant of Record. The browser opens Paddle's
+// own checkout overlay; the plan is granted only when Paddle's signed
+// webhook confirms payment (paddle-webhook.js).
+router.post('/checkout/paddle', (req, res) => {
+  if (!paymentsAvailability().paddle) return unavailable(res);
+  res.json({
+    priceId: config.paddle.priceId,
+    clientToken: config.paddle.clientToken,
+    environment: config.paddle.environment,
+    customData: { user_id: String(req.userId) }
+  });
+});
+
+async function createOrder(userId, provider) {
+  const pro = getPlan('pro');
+  const { rows } = await pool.query(
+    'INSERT INTO orders (user_id, provider, plan, amount_uzs) VALUES ($1, $2, $3, $4) RETURNING id, amount_uzs',
+    [userId, provider, 'pro', pro.priceUzs]
+  );
+  return rows[0];
+}
+
+// Uzbekistan: Payme and Click both work by redirecting to a hosted checkout
+// for a specific order; their server-to-server callbacks then confirm it.
+router.post('/checkout/payme', async (req, res) => {
+  if (!paymentsAvailability().payme) return unavailable(res);
+  const order = await createOrder(req.userId, 'payme');
+  const lang = ['uz', 'ru', 'en'].includes(req.body?.lang) ? req.body.lang : 'uz';
+  const params = [
+    `m=${config.payme.merchantId}`,
+    `ac.order_id=${order.id}`,
+    `a=${order.amount_uzs * 100}`,
+    `l=${lang}`,
+    `c=${config.publicUrl}/?payment=return`
+  ].join(';');
+  res.json({ orderId: order.id, url: `${config.payme.checkoutUrl}/${Buffer.from(params, 'utf8').toString('base64')}` });
+});
+
+router.post('/checkout/click', async (req, res) => {
+  if (!paymentsAvailability().click) return unavailable(res);
+  const order = await createOrder(req.userId, 'click');
+  const qs = new URLSearchParams({
+    service_id: config.click.serviceId,
+    merchant_id: config.click.merchantId,
+    amount: Number(order.amount_uzs).toFixed(2),
+    transaction_param: String(order.id),
+    return_url: `${config.publicUrl}/?payment=return`
+  });
+  res.json({ orderId: order.id, url: `https://my.click.uz/services/pay?${qs.toString()}` });
 });
 
 module.exports = router;
+module.exports.paymentsAvailability = paymentsAvailability;
